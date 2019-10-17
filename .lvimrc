@@ -1,0 +1,3 @@
+if &ft == "asm"
+    setlocal ft=rgbasm
+endif
