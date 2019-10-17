@@ -5,7 +5,9 @@ PREPROC=$(VIRTUALENV); $(PYTHON) utils/preprocessor.py
 
 ASM=rgbasm -iincludes/
 LINK=rgblink
-FIX=rgbfix
+FIX=rgbfix -C
+
+TYPE=gbc
 
 EMU=binjgb
 
@@ -24,13 +26,13 @@ asm: $(TARGET).asm.built
 	$(ASM) -o$(TARGET).obj $(TARGET).asm.built
 
 link: $(TARGET).obj
-	$(LINK) -o$(TARGET).gb $(TARGET).obj
+	$(LINK) -o$(TARGET).$(TYPE) $(TARGET).obj
 
-fix: $(TARGET).gb
-	$(FIX) -v -p0 $(TARGET).gb
+fix: $(TARGET).$(TYPE)
+	$(FIX) -v -p0 $(TARGET).$(TYPE)
 
 run:
-	$(EMU) $(TARGET).gb
+	$(EMU) $(TARGET).$(TYPE)
 
 clean:
-	$(RM) $(TARGET).obj $(TARGET).gb $(TARGET).asm.built
+	$(RM) $(TARGET).obj $(TARGET).$(TYPE) $(TARGET).asm.built
