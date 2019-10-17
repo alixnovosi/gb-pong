@@ -5,11 +5,12 @@ PREPROC=$(VIRTUALENV); $(PYTHON) utils/preprocessor.py
 
 ASM=rgbasm -iincludes/
 LINK=rgblink
-FIX=rgbfix -C
+FIX=rgbfix
 
-TYPE=gbc
+TYPE=gb
 
 EMU=binjgb
+DEBUG=binjgb-debugger
 
 TARGET=pong
 
@@ -33,6 +34,9 @@ fix: $(TARGET).$(TYPE)
 
 run:
 	$(EMU) $(TARGET).$(TYPE)
+
+debug:
+	$(DEBUG) $(TARGET).$(TYPE)
 
 clean:
 	$(RM) $(TARGET).obj $(TARGET).$(TYPE) $(TARGET).asm.built

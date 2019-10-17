@@ -1,60 +1,136 @@
-; we need boilerplate - we gotta start at $0100,
-; but code actually starts at $0150.
-SECTION "entry point", ROM0[$0100]
-    nop
-    jp $0150
+INCLUDE "includes/gbhw.inc"
 
-SECTION "main", ROM0[$0150] ; the GB starts running code
-                            ; at $0150.
-    ; specify palette.
-    ; Set a color palette.  Those aren't exposed directly in main RAM; instead,
-    ; you have to write to a register, which will then write the palette to...
-    ; somewhere.  Also, colors are two bytes (RGB555), but the register is only
-    ; one byte, which complicates things a bit more.
-    ; Luckily, if we set the high bit of the control register to 1, it
-    ; auto-increments every time we write to the write register, meaning...
-    ; well, it looks like this.
+_DMACODE EQU $FF80
+_OAMDATA EQU _RAM               ; Must be a multiple of $100
+_OAMDATALENGTH EQU $A0
 
-    ; this is updating palette 0, the default.
-    ld a, %10000000
-    ld [$FF68], a
+            RSSET _OAMDATA      ; Base location is _OAMDATA
+BallYPos    RB 1                ; Set each to an incrementing location
+BallXPos    RB 1
+BallTileNum RB 1
 
-    ; make this shades of blues instead of rgb
-    ; so I'm not 100% copying this.
-    ld bc, %0010000000000000  ; most blue
-    ld a, c
-    ld [$FF00+$69], a
-    ld a, b
-    ld [$FF00+$69], a
-    ld bc, %0010110000000000  ; less blue
-    ld a, c
-    ld [$FF00+$69], a
-    ld a, b
-    ld [$FF00+$69], a
-    ld bc, %0011010000000000  ; even less blue
-    ld a, c
-    ld [$FF00+$69], a
-    ld a, b
-    ld [$FF00+$69], a
-    ld bc, %0100100000000000  ; least blue
-    ld a, c
-    ld [$FF00+$69], a
-    ld a, b
-    ld [$FF00+$69], a
+             RSSET _OAMDATA+_OAMDATALENGTH
+_INPUT       RB 1               ; Put input data at the end of the oam data
+_SEED        RB 1
+_LASTINPUT   RB 1
 
-	ld hl, $8000			; load tiles (starting at $8000
-			; ) into a reg.
-	ld bc, `00112233		; rgbds can write pixel stuff
-	; directly.
-	REPT 8				  ; and then put that in hl.
+SECTION "Vblank", ROM0[$0040]
+  jp _DMACODE
 
-    ld a, b
-    ld [hl+], a
-    ld a, c
-    ld [hl+], a
-    ENDR
+SECTION "LCDC", ROM0[$0048]
+  reti
 
-_halt:
-    halt
-    nop
-    jr _halt
+SECTION "Time_Overflow", ROM0[$0050]
+  reti
+
+SECTION "Serial", ROM0[$0058]
+  reti
+
+SECTION "p1thru4", ROM0[$0060]
+  reti
+
+SECTION "start", ROM0[$0100]
+  nop
+  jp main
+
+  ROM_HEADER ROM_NOMBC, ROM_SIZE_32KBYTE, RAM_SIZE_0KBYTE
+
+INCLUDE "includes/memory.asm"
+
+main:
+  nop
+  di                            ; disable interrupts
+  ld sp, $ffff                  ; set the stack pointer to the highest memory location
+
+  call initdma                  ; move dma code to hram
+
+  ld a, IEF_VBLANK              ; enable the vblank interrupt
+  ld [rIE], a
+
+  ei                            ; re-enable interrupts
+
+initscreen:
+  ld a, %11100100               ; Palette colors, darkest to lightest
+
+  ld [rBGP], a                  ; Set background palette
+  ldh [rOBP0],a                 ; Set sprite palette 0
+  ldh [rOBP1],a                 ; And palette 1
+
+  call StopLCD                  ; Need to stop LCD before loading vram
+
+  ld hl, Sprites                ; Load the tile data into Vram
+  ld de, _VRAM
+  ld bc, 16*(SpritesEnd-Sprites)
+  call mem_Copy
+
+  ld a, 0                       ; Clear sprite table
+  ld hl, _OAMDATA
+  ld bc, _OAMDATALENGTH
+  call mem_Set
+
+  call StartLCD                 ; Free to start the LCD again
+
+initsprite:
+  ld a, 64                      ; Initialize ball sprite
+  ld [BallYPos], a
+  ld a, 16
+  ld [BallXPos], a
+  ld a, 1
+  ld [BallTileNum], a
+
+loop:
+  halt
+  nop                           ; Always need nop after halt
+  ld a, [BallXPos]
+  inc a
+  ld [BallXPos], a
+  jr loop
+
+; DMA stuff
+initdma:
+  ld de, _DMACODE               ; Copy the dma code to hram
+  ld hl, dmacode
+  ld bc, dmaend-dmacode
+  call mem_CopyVRAM
+  ret
+
+dmacode:                        ; Initiate a DMA transfer from _RAM
+  push af
+  ld a, _RAM/$100               ; First two bytes of transfer start location
+  ldh [rDMA], a                 ; Start DMA transfer
+  ld a, $28                     ; How many loops to wait
+
+dma_wait:                       ; Wait for transfer to finish
+  dec a
+  jr nz, dma_wait
+  pop af
+  reti
+
+dmaend:
+; End DMA stuff
+
+; If the lcd is on, wait for vblank then turn it off
+StopLCD:
+  ld a, [rLCDC]
+  rlca                          ; Put the high bit of LCDC into the carry flag
+  ret nc                        ; If screen is already off, exit
+
+.stoplcd_wait:                  ; Loop until vblank
+  ld a, [rLY]                   ; Get LCDC y coord
+  cp 145                        ; Is it on line 145?
+  jr nz, .stoplcd_wait          ; if not, keep waiting
+
+  ld a, [rLCDC]                 ; Get the current LCDC val
+  res 7, a                      ; reset bit 7
+  ld [rLCDC], a                 ; and put it back
+
+  ret
+
+; Start up the LCD with required flags
+StartLCD:
+  ld a, LCDCF_ON|LCDCF_BG8000|LCDCF_BG9800|LCDCF_BGON|LCDCF_OBJ8|LCDCF_OBJON
+  ld [rLCDC], a
+  ret
+
+Sprites: {{ sprites("blank", "ball") }}
+SpritesEnd:
