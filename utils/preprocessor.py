@@ -3,7 +3,7 @@ import re
 
 from PIL import Image
 
-DEFAULTFILE = "../helicopter.asm"
+DEFAULTFILE = "../ball.asm"
 MACROREGEX = r"([^ ]+) +{{ *(.+) *}}"
 
 def sprites(*args):
@@ -14,7 +14,7 @@ def sprites(*args):
     return sprites
 
 def sprite(path):
-    img = Image.open("sprites/" + path + ".png")
+    img = Image.open(f"sprites/{path}.png")
 
     bytes1, bytes2 = [], []
 

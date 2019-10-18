@@ -4,10 +4,16 @@ _DMACODE EQU $FF80
 _OAMDATA EQU _RAM                 ; Must be a multiple of $100
 _OAMDATALENGTH EQU $A0
 
-              RSSET _OAMDATA      ; Base location is _OAMDATA
-BallYPos      RB 1                ; Set each to an incrementing location
-BallXPos      RB 1
-BallTileNum RB 1
+; i'm lazy
+LEFTBORDER EQU 8
+RIGHTBORDER EQU 160
+TOPBORDER EQU 8+8
+BOTTOMBORDER EQU 144+8
+
+               RSSET _OAMDATA     ; Base location is _OAMDATA
+BallYPos       RB 1               ; Set each to an incrementing location
+BallXPos       RB 1
+BallTileNum    RB 1
 
                RSSET _OAMDATA+_OAMDATALENGTH
 _INPUT         RB 1               ; Put input data at the end of the oam data
@@ -82,7 +88,128 @@ loop:
     halt
     nop                           ; Always need nop after halt
 
+    call getinput
+
+    ld a, [_INPUT]                ; load input
+
+    push af                       ; avoid clobbering a with the and
+
+    and PADF_LEFT                 ; see if left is pressed...
+    call nz, moveleft
+
+    pop af
+    push af                       ; don't clobber the a again
+
+    and PADF_RIGHT                ; ...right
+    call nz, moveright
+
+    pop af
+    push af
+
+    and PADF_UP                   ; ...up
+    call nz, moveup
+
+    pop af
+    push af
+
+    and PADF_DOWN                 ; and down
+    call nz, movedown
+
+    pop af
+
     jr loop
+
+getinput:
+    push af
+    push bc
+
+    ; could save lastinput here by copying [_INPUT] into a and then a into somewhere else.
+    ld a, %00100000               ; select bit 5 for button keys
+    ld [rP1], a
+
+    ld a, [rP1]                   ; Read several times to let the values straighten out
+    ld a, [rP1]
+    ld a, [rP1]
+    ld a, [rP1]
+
+    and $0F                       ; take the bottom four bits
+    swap a                        ; swap upper and lower
+    ld b, a                       ; save button input in b
+
+    ld a, %00010000               ; choose bit 4 for joystick
+    ld [rP1], a
+
+    ld a, [rP1]                   ; Read several times to let the values straighten out
+    ld a, [rP1]
+    ld a, [rP1]
+    ld a, [rP1]
+
+    and $0F                       ; take the bottom four bits
+    or  b                         ; combine with the button input saved in b
+
+    cpl                           ; inverse the bits so that 1 is pressed
+
+    ld [_INPUT], a                ; save the result
+
+    pop bc
+    pop af
+    ret
+
+moveleft:
+    push af
+
+    ld a, [BallXPos]
+
+    cp LEFTBORDER                ; compare with left edge of screen to see if we should skip move
+    jr z, .popret
+
+    dec a
+    ld [BallXPos], a
+.popret:
+    pop af
+    ret
+
+moveright:
+    push af
+
+    ld a, [BallXPos]
+
+    cp RIGHTBORDER
+    jr z, .popret
+
+    inc a
+    ld [BallXPos], a
+.popret:
+    pop af
+    ret
+
+moveup:
+    push af
+
+    ld a, [BallYPos]
+
+    cp TOPBORDER
+    jr z, .popret
+
+    dec a
+    ld [BallYPos], a
+.popret:
+    pop af
+    ret
+
+movedown:
+    push af
+
+    ld a, [BallYPos]
+
+    cp BOTTOMBORDER
+    jr z, .popret
+
+    inc a
+    ld [BallYPos], a
+.popret:
+    pop af
+    ret
 
 ; DMA stuff
 initdma:
