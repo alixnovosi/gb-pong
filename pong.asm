@@ -10,15 +10,33 @@ RIGHTBORDER EQU 160
 TOPBORDER EQU 8+8
 BOTTOMBORDER EQU 144+8
 
-               RSSET _OAMDATA     ; Base location is _OAMDATA
-BallYPos       RB 1               ; Set each to an incrementing location
-BallXPos       RB 1
-BallTileNum    RB 1
+                     RSSET _OAMDATA     ; Base location is _OAMDATA
+BallYPos             RB 1               ; Set each to an incrementing location
+BallXPos             RB 1
+BallTileNum          RB 1
+BallAttrs            RB 1
+PlayerPadTopYPos     RB 1
+PlayerPadTopXPos     RB 1
+PlayerPadTopTileNum  RB 1
+PlayerPadTopAttrs    RB 1
+PlayerPadBotYPos     RB 1
+PlayerPadBotXPos     RB 1
+PlayerPadBotTileNum  RB 1
+PlayerPadBotAttrs    RB 1
 
                RSSET _OAMDATA+_OAMDATALENGTH
 _INPUT         RB 1               ; Put input data at the end of the oam data
 _SEED          RB 1
 _LASTINPUT     RB 1
+
+
+; stolen macro to help write colors.
+dcolor: MACRO  ; $rrggbb -> gbc representation
+_r = ((\1) & $ff0000) >> 16 >> 3
+_g = ((\1) & $00ff00) >> 8  >> 3
+_b = ((\1) & $0000ff) >> 0  >> 3
+    dw (_r << 0) | (_g << 5) | (_b << 10)
+    ENDM
 
 SECTION "Vblank", ROM0[$0040]
     jp _DMACODE
@@ -59,8 +77,8 @@ initscreen:
     ld a, %11100100               ; Palette colors, darkest to lightest
 
     ld [rBGP], a                  ; Set background palette
-    ldh [rOBP0],a                 ; Set sprite palette 0
-    ldh [rOBP1],a                 ; And palette 1
+    ldh [rOBP0], a                ; Set sprite palette 0
+    ldh [rOBP1], a                ; And palette 1
 
     call StopLCD                  ; Need to stop LCD before loading vram
 
@@ -74,19 +92,39 @@ initscreen:
     ld bc, _OAMDATALENGTH
     call mem_Set
 
-    call StartLCD                 ; Free to start the LCD again
+    call StartLCD                 ; free to start the LCD again
 
 initsprite:
-    ld a, 64                      ; Initialize ball sprite
+    ld a, 64                      ; initialize ball sprite
     ld [BallYPos], a
     ld a, 16
     ld [BallXPos], a
     ld a, 1
     ld [BallTileNum], a
+    ld a, %00000000
+    ld [BallAttrs], a
+
+    ld a, 80                      ; and paddle
+    ld [PlayerPadTopYPos], a
+    ld a, 16
+    ld [PlayerPadTopXPos], a
+    ld a, 2
+    ld [PlayerPadTopTileNum], a
+    ld a, %00000000
+    ld [PlayerPadTopAttrs], a
+
+    ld a, 88                      ; and paddle bottom
+    ld [PlayerPadBotYPos], a
+    ld a, 16
+    ld [PlayerPadBotXPos], a
+    ld a, 3
+    ld [PlayerPadBotTileNum], a
+    ld a, %00000000
+    ld [PlayerPadBotAttrs], a
 
 loop:
     halt
-    nop                           ; Always need nop after halt
+    nop                           ; always need nop after halt
 
     call getinput
 
@@ -155,16 +193,17 @@ getinput:
     pop af
     ret
 
-moveleft:
+moveleft:                         ; left and right are nice because top/bot share an xpos.
     push af
 
-    ld a, [BallXPos]
+    ld a, [PlayerPadTopXPos]
 
     cp LEFTBORDER                ; compare with left edge of screen to see if we should skip move
     jr z, .popret
 
     dec a
-    ld [BallXPos], a
+    ld [PlayerPadTopXPos], a
+    ld [PlayerPadBotXPos], a
 .popret:
     pop af
     ret
@@ -172,13 +211,14 @@ moveleft:
 moveright:
     push af
 
-    ld a, [BallXPos]
+    ld a, [PlayerPadTopXPos]
 
     cp RIGHTBORDER
     jr z, .popret
 
     inc a
-    ld [BallXPos], a
+    ld [PlayerPadTopXPos], a
+    ld [PlayerPadBotXPos], a
 .popret:
     pop af
     ret
@@ -186,13 +226,16 @@ moveright:
 moveup:
     push af
 
-    ld a, [BallYPos]
+    ld a, [PlayerPadTopYPos]
 
     cp TOPBORDER
     jr z, .popret
 
     dec a
-    ld [BallYPos], a
+    ld [PlayerPadTopYPos], a
+    ld a, [PlayerPadBotYPos]
+    dec a
+    ld [PlayerPadBotYPos], a
 .popret:
     pop af
     ret
@@ -200,13 +243,17 @@ moveup:
 movedown:
     push af
 
-    ld a, [BallYPos]
+    ld a, [PlayerPadBotYPos] ; swapped from top,
+                             ; because bottom will hit border first when moving down
 
     cp BOTTOMBORDER
     jr z, .popret
 
     inc a
-    ld [BallYPos], a
+    ld [PlayerPadBotYPos], a
+    ld a, [PlayerPadTopYPos]
+    inc a
+    ld [PlayerPadTopYPos], a
 .popret:
     pop af
     ret
@@ -257,5 +304,5 @@ StartLCD:
     ld [rLCDC], a
     ret
 
-Sprites: {{ sprites("blank", "ball") }}
+Sprites: {{ sprites("blank", "ball", "ppadtop", "ppadbot") }}
 SpritesEnd:
