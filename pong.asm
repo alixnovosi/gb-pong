@@ -10,6 +10,8 @@ RIGHTBORDER EQU 160
 TOPBORDER EQU 8+8
 BOTTOMBORDER EQU 144+8
 
+PADSPEED EQU 2
+
                      RSSET _OAMDATA     ; Base location is _OAMDATA
 BallYPos             RB 1               ; Set each to an incrementing location
 BallXPos             RB 1
@@ -28,6 +30,11 @@ PlayerPadBotAttrs    RB 1
 _INPUT         RB 1               ; Put input data at the end of the oam data
 _SEED          RB 1
 _LASTINPUT     RB 1
+_BallSpeedY    RB 1
+_BallSpeedX    RB 1
+_BallYDir      RB 1               ; 1 is down
+_BallXDir      RB 1               ; 1 is right
+_MaxBallSpeed  RB 1
 
 
 ; stolen macro to help write colors.
@@ -61,6 +68,7 @@ SECTION "start", ROM0[$0100]
 
 INCLUDE "includes/memory.asm"
 
+
 main:
     nop
     di                            ; disable interrupts
@@ -72,6 +80,7 @@ main:
     ld [rIE], a
 
     ei                            ; re-enable interrupts
+
 
 initscreen:
     ld a, %11100100               ; Palette colors, darkest to lightest
@@ -94,8 +103,9 @@ initscreen:
 
     call StartLCD                 ; free to start the LCD again
 
+
 initsprite:
-    ld a, 64                      ; initialize ball sprite
+    ld a, 30                      ; initialize ball sprite
     ld [BallYPos], a
     ld a, 16
     ld [BallXPos], a
@@ -122,11 +132,24 @@ initsprite:
     ld a, %00000000
     ld [PlayerPadBotAttrs], a
 
+    ld a, 2
+    ld [_BallSpeedY], a
+    ld a, 1
+    ld [_BallSpeedX], a
+    ld a, 1
+    ld [_BallYDir], a
+    ld a, 1
+    ld [_BallXDir], a
+    ld a, 5
+    ld [_MaxBallSpeed], a
+
+
 loop:
     halt
     nop                           ; always need nop after halt
 
     call getinput
+    call moveball
 
     ld a, [_INPUT]                ; load input
 
@@ -156,6 +179,7 @@ loop:
     pop af
 
     jr loop
+
 
 getinput:
     push af
@@ -193,20 +217,255 @@ getinput:
     pop af
     ret
 
-moveleft:                         ; left and right are nice because top/bot share an xpos.
+
+moveball:
     push af
+    push bc
+    push hl
+
+; CHECK FOR LEFT BOUNCE
+.left
+    ; switch vel if we hit left wall
+    ld a, [BallXPos]
+    cp LEFTBORDER                ; compare with left edge of screen to see if we should skip move
+    jr nz, .noleft
+
+    ; AND we are moving left
+    ld a, [_BallXDir]
+    cp 0
+    jr nz, .noleft
+
+    ; then swap vel
+    ld a, 1
+    ld [_BallXDir], a
+    jp .noright                  ; if we hit the left wall, we won't hit the right one.
+
+; CHECK FOR RIGHT BOUNCE
+.noleft
+.right
+    ld a, [BallXPos]
+    cp RIGHTBORDER
+    jr nz, .noright
+
+    ld a, [_BallXDir]
+    cp 1
+    jr nz, .noright
+
+    ld a, 0
+    ld [_BallXDir], a
+
+; CHECK FOR UP BOUNCE
+.noright
+.up
+    ld a, [BallYPos]
+    cp TOPBORDER
+    jr nz, .noup
+
+    ld a, [_BallYDir]
+    cp 0
+    jr nz, .noup
+
+    ld a, 1
+    ld [_BallYDir], a
+    jp .nodown
+
+; CHECK FOR DOWN BOUNCE
+.noup
+.down
+    ld a, [BallYPos]
+    cp BOTTOMBORDER
+    jr nz, .doxmove
+
+    ld a, [_BallYDir]
+    cp 1
+    jr nz, .doxmove
+
+    ld a, 0
+    ld [_BallYDir], a
+
+; HANDLE X MOVE
+.nodown
+.doxmove
+    ; update position from speed + direction
+    ; abort if vx is zero.
+    ld a, [_BallSpeedX]
+    cp 0
+    jr z, .doymove
+
+    ld a, [_BallXDir]
+    cp 1
+    jr z, .moveright
+
+; LEFT
+.moveleft
+    ld a, [BallXPos]
+    ld b, a
+    ld a, [_BallSpeedX]
+
+.loopleft
+    dec b
+
+    ; leave loop if counter runs out.
+    dec a
+    cp 0
+    jr z, .loopleftdone
+
+.preloopleft
+    ; bounce early if dec would take us out of bounds
+    ld l, a
+    ld a, b
+    sub a, LEFTBORDER
+    jr nc, .nofixleft
+    ld a, LEFTBORDER
+    ld b, a
+    jp .loopleftdone
+
+.nofixleft
+    ld a, l
+    jp .loopleft
+
+.loopleftdone
+    ld a, b
+    ld [BallXPos], a
+    jp .doymove
+
+; RIGHT
+.moveright
+    ld a, [BallXPos]
+    ld b, a
+    ld a, [_BallSpeedX]
+
+.loopright
+    inc b
+
+    ; leave loop if counter runs out.
+    dec a
+    cp 0
+    jr z, .looprightdone
+
+.preloopright
+    ; bounce early if dec would take us out of bounds
+    ld l, a
+    ld a, RIGHTBORDER
+    sub a, b
+    jr nc, .nofixright
+    ld a, RIGHTBORDER
+    ld b, a
+    jp .looprightdone
+
+.nofixright
+    ld a, l
+    jp .loopright
+
+.looprightdone
+    ld a, b
+    ld [BallXPos], a
+
+; HANDLE Y MOVE
+.doymove
+    ; abort if vx is zero.
+    ld a, [_BallSpeedY]
+    cp 0
+    jr z, .popret
+
+    ld a, [_BallSpeedY]
+    cp 0
+    jr z, .popret
+
+    ld a, [_BallYDir]
+    cp 1
+    jr z, .movedown
+
+; UP
+.moveup
+    ld a, [BallYPos]
+    ld b, a
+    ld a, [_BallSpeedY]
+
+.loopup
+    dec b
+
+    ; leave loop if counter runs out.
+    dec a
+    cp 0
+    jr z, .loopupdone
+
+.preloopup
+    ; bounce early if dec would take us out of bounds
+    ld l, a
+    ld a, b
+    sub a, TOPBORDER
+    jr nc, .nofixup
+    ld a, TOPBORDER
+    ld b, a
+    jp .loopupdone
+
+.nofixup
+    ld a, l
+    jp .loopup
+
+.loopupdone
+    ld a, b
+    ld [BallYPos], a
+    jp .popret
+
+; DOWN
+.movedown
+    ld a, [BallYPos]
+    ld b, a
+    ld a, [_BallSpeedY]
+
+.loopdown
+    inc b
+
+    ; leave loop if counter runs out.
+    dec a
+    cp 0
+    jr z, .loopdowndone
+
+.preloopdown
+    ; bounce early if dec would take us out of bounds
+    ld l, a
+    ld a, BOTTOMBORDER
+    sub a, b
+    jr nc, .nofixdown
+    ld a, BOTTOMBORDER
+    ld b, a
+    jp .loopdowndone
+
+.nofixdown
+    ld a, l
+    jp .loopdown
+
+.loopdowndone
+    ld a, b
+    ld [BallYPos], a
+
+.popret
+    pop hl
+    pop bc
+    pop af
+    ret
+
+
+moveleft:                     ; left and right are nice because top/bot share an xpos.
+    push af
+    push bc
 
     ld a, [PlayerPadTopXPos]
 
-    cp LEFTBORDER                ; compare with left edge of screen to see if we should skip move
+    cp LEFTBORDER             ; compare with left edge of screen to see if we should skip move
     jr z, .popret
 
     dec a
     ld [PlayerPadTopXPos], a
     ld [PlayerPadBotXPos], a
+
 .popret:
+    pop bc
     pop af
     ret
+
 
 moveright:
     push af
@@ -219,9 +478,11 @@ moveright:
     inc a
     ld [PlayerPadTopXPos], a
     ld [PlayerPadBotXPos], a
+
 .popret:
     pop af
     ret
+
 
 moveup:
     push af
@@ -236,9 +497,11 @@ moveup:
     ld a, [PlayerPadBotYPos]
     dec a
     ld [PlayerPadBotYPos], a
+
 .popret:
     pop af
     ret
+
 
 movedown:
     push af
@@ -254,9 +517,11 @@ movedown:
     ld a, [PlayerPadTopYPos]
     inc a
     ld [PlayerPadTopYPos], a
+
 .popret:
     pop af
     ret
+
 
 ; DMA stuff
 initdma:
@@ -266,11 +531,13 @@ initdma:
     call mem_CopyVRAM
     ret
 
+
 dmacode:                          ; Initiate a DMA transfer from _RAM
     push af
     ld a, _RAM/$100               ; First two bytes of transfer start location
     ldh [rDMA], a                 ; Start DMA transfer
     ld a, $28                     ; How many loops to wait
+
 
 dma_wait:                         ; Wait for transfer to finish
     dec a
@@ -278,8 +545,10 @@ dma_wait:                         ; Wait for transfer to finish
     pop af
     reti
 
+
 dmaend:
 ; End DMA stuff
+
 
 ; If the lcd is on, wait for vblank then turn it off
 StopLCD:
@@ -298,11 +567,13 @@ StopLCD:
 
     ret
 
+
 ; Start up the LCD with required flags
 StartLCD:
     ld a, LCDCF_ON|LCDCF_BG8000|LCDCF_BG9800|LCDCF_BGON|LCDCF_OBJ8|LCDCF_OBJON
     ld [rLCDC], a
     ret
+
 
 Sprites: {{ sprites("blank", "ball", "ppadtop", "ppadbot") }}
 SpritesEnd:
