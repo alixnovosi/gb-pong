@@ -35,6 +35,7 @@ _BallSpeedX    RB 1
 _BallYDir      RB 1               ; 1 is down
 _BallXDir      RB 1               ; 1 is right
 _MaxBallSpeed  RB 1
+_P1PadSpeed    RB 1
 
 
 ; stolen macro to help write colors.
@@ -142,6 +143,8 @@ initsprite:
     ld [_BallXDir], a
     ld a, 5
     ld [_MaxBallSpeed], a
+    ld a, 2
+    ld [_P1PadSpeed], a
 
 
 loop:
@@ -154,28 +157,23 @@ loop:
     ld a, [_INPUT]                ; load input
 
     push af                       ; avoid clobbering a with the and
-
     and PADF_LEFT                 ; see if left is pressed...
-    call nz, moveleft
-
+    call nz, p1moveleft
     pop af
+
     push af                       ; don't clobber the a again
-
     and PADF_RIGHT                ; ...right
-    call nz, moveright
-
+    call nz, p1moveright
     pop af
-    push af
 
+    push af
     and PADF_UP                   ; ...up
-    call nz, moveup
-
+    call nz, p1moveup
     pop af
+
     push af
-
     and PADF_DOWN                 ; and down
-    call nz, movedown
-
+    call nz, p1movedown
     pop af
 
     jr loop
@@ -223,81 +221,105 @@ moveball:
     push bc
     push hl
 
-; CHECK FOR LEFT BOUNCE
-.left
+    call checkballbouncex
+    call checkballbouncey
+
+    call doballxmove
+    call doballymove
+
+.popret
+    pop hl
+    pop bc
+    pop af
+    ret
+
+
+checkballbouncex:
+    push af
+
     ; switch vel if we hit left wall
+.left
     ld a, [BallXPos]
-    cp LEFTBORDER                ; compare with left edge of screen to see if we should skip move
-    jr nz, .noleft
+    cp LEFTBORDER                ; compare with left edge to see if we should skip move
+    jr nz, .right
 
     ; AND we are moving left
     ld a, [_BallXDir]
     cp 0
-    jr nz, .noleft
+    jr nz, .right
 
     ; then swap vel
     ld a, 1
     ld [_BallXDir], a
-    jp .noright                  ; if we hit the left wall, we won't hit the right one.
+    jp .popret                  ; if we hit the left wall, we won't hit the right one.
 
 ; CHECK FOR RIGHT BOUNCE
-.noleft
 .right
     ld a, [BallXPos]
     cp RIGHTBORDER
-    jr nz, .noright
+    jr nz, .popret
 
     ld a, [_BallXDir]
     cp 1
-    jr nz, .noright
+    jr nz, .popret
 
     ld a, 0
     ld [_BallXDir], a
 
-; CHECK FOR UP BOUNCE
-.noright
+.popret
+    pop af
+    ret
+
+
+checkballbouncey:
+    push af
+
 .up
     ld a, [BallYPos]
     cp TOPBORDER
-    jr nz, .noup
+    jr nz, .down
 
     ld a, [_BallYDir]
     cp 0
-    jr nz, .noup
+    jr nz, .down
 
     ld a, 1
     ld [_BallYDir], a
-    jp .nodown
+    jp .popret
 
-; CHECK FOR DOWN BOUNCE
-.noup
 .down
     ld a, [BallYPos]
     cp BOTTOMBORDER
-    jr nz, .doxmove
+    jr nz, .popret
 
     ld a, [_BallYDir]
     cp 1
-    jr nz, .doxmove
+    jr nz, .popret
 
     ld a, 0
     ld [_BallYDir], a
 
-; HANDLE X MOVE
-.nodown
-.doxmove
+.popret
+    pop af
+    ret
+
+
+doballxmove
+    push af
+    push bc
+    push hl
+
     ; update position from speed + direction
     ; abort if vx is zero.
     ld a, [_BallSpeedX]
     cp 0
-    jr z, .doymove
+    jr z, .popret
 
     ld a, [_BallXDir]
     cp 1
     jr z, .moveright
 
-; LEFT
-.moveleft
+.left
     ld a, [BallXPos]
     ld b, a
     ld a, [_BallSpeedX]
@@ -310,7 +332,6 @@ moveball:
     cp 0
     jr z, .loopleftdone
 
-.preloopleft
     ; bounce early if dec would take us out of bounds
     ld l, a
     ld a, b
@@ -327,7 +348,7 @@ moveball:
 .loopleftdone
     ld a, b
     ld [BallXPos], a
-    jp .doymove
+    jp .popret
 
 ; RIGHT
 .moveright
@@ -343,7 +364,6 @@ moveball:
     cp 0
     jr z, .looprightdone
 
-.preloopright
     ; bounce early if dec would take us out of bounds
     ld l, a
     ld a, RIGHTBORDER
@@ -361,8 +381,19 @@ moveball:
     ld a, b
     ld [BallXPos], a
 
-; HANDLE Y MOVE
-.doymove
+.popret
+    pop hl
+    pop bc
+    pop af
+    ret
+
+
+doballymove:
+    push af
+    push bc
+    push hl
+
+.up
     ; abort if vx is zero.
     ld a, [_BallSpeedY]
     cp 0
@@ -390,10 +421,10 @@ moveball:
     cp 0
     jr z, .loopupdone
 
-.preloopup
-    ; bounce early if dec would take us out of bounds
     ld l, a
     ld a, b
+
+    ; bounce early if dec would take us out of bounds
     sub a, TOPBORDER
     jr nc, .nofixup
     ld a, TOPBORDER
@@ -409,7 +440,6 @@ moveball:
     ld [BallYPos], a
     jp .popret
 
-; DOWN
 .movedown
     ld a, [BallYPos]
     ld b, a
@@ -423,7 +453,6 @@ moveball:
     cp 0
     jr z, .loopdowndone
 
-.preloopdown
     ; bounce early if dec would take us out of bounds
     ld l, a
     ld a, BOTTOMBORDER
@@ -448,77 +477,168 @@ moveball:
     ret
 
 
-moveleft:                     ; left and right are nice because top/bot share an xpos.
+p1moveleft:                     ; left and right are nice because top/bot share an xpos.
     push af
     push bc
+    push hl
 
     ld a, [PlayerPadTopXPos]
+    ld b, a
+    ld a, [_P1PadSpeed]
 
-    cp LEFTBORDER             ; compare with left edge of screen to see if we should skip move
-    jr z, .popret
+.loop
+    dec b
 
     dec a
+    cp 0
+    jr z, .loopdone
+
+    ld l, a
+    ld a, b
+
+    sub a, LEFTBORDER
+    jr nc, .nofix
+    ld a, LEFTBORDER
+    ld b, a
+    jp .loopdone
+
+.nofix
+    ld a, l
+    jp .loop
+
+.loopdone
+    ld a, b
     ld [PlayerPadTopXPos], a
     ld [PlayerPadBotXPos], a
 
 .popret:
+    pop hl
     pop bc
     pop af
     ret
 
 
-moveright:
+p1moveright:
     push af
+    push bc
+    push hl
 
     ld a, [PlayerPadTopXPos]
+    ld b, a
+    ld a, [_P1PadSpeed]
 
-    cp RIGHTBORDER
-    jr z, .popret
+.loop
+    inc b
 
-    inc a
+    dec a
+    cp 0
+    jr z, .loopdone
+
+    ld l, a
+    ld a, RIGHTBORDER
+
+    sub a, b
+    jr nc, .nofix
+    ld a, RIGHTBORDER
+    ld b, a
+    jp .loopdone
+
+.nofix
+    ld a, l
+    jp .loop
+
+.loopdone
+    ld a, b
     ld [PlayerPadTopXPos], a
     ld [PlayerPadBotXPos], a
 
 .popret:
+    pop hl
+    pop bc
     pop af
     ret
 
 
-moveup:
+p1moveup:
     push af
+    push bc
+    push hl
 
     ld a, [PlayerPadTopYPos]
+    ld b, a
+    ld a, [_P1PadSpeed]
 
-    cp TOPBORDER
-    jr z, .popret
+.loop
+    dec b
 
     dec a
+    cp 0
+    jr z, .loopdone
+
+    ld l, a
+    ld a, b
+
+    sub a, TOPBORDER
+    jr nc, .nofix
+    ld a, TOPBORDER
+    ld b, a
+    jp .loopdone
+
+.nofix
+    ld a, l
+    jp .loop
+
+.loopdone
+    ld a, b
     ld [PlayerPadTopYPos], a
+    add a, 8
+    ld [PlayerPadBotYPos], a
+
+.popret:
+    pop hl
+    pop bc
+    pop af
+    ret
+
+
+p1movedown:
+    push af
+    push bc
+    push hl
+
     ld a, [PlayerPadBotYPos]
+    ld b, a
+    ld a, [_P1PadSpeed]
+
+.loop
+    inc b
+
     dec a
+    cp 0
+    jr z, .loopdone
+
+    ld l, a
+    ld a, BOTTOMBORDER
+
+    sub a, b
+    jr nc, .nofix
+    ld a, BOTTOMBORDER
+    ld b, a
+    jp .loopdone
+
+.nofix
+    ld a, l
+    jp .loop
+
+.loopdone
+    ld a, b
     ld [PlayerPadBotYPos], a
-
-.popret:
-    pop af
-    ret
-
-
-movedown:
-    push af
-
-    ld a, [PlayerPadBotYPos] ; swapped from top,
-                             ; because bottom will hit border first when moving down
-
-    cp BOTTOMBORDER
-    jr z, .popret
-
-    inc a
-    ld [PlayerPadBotYPos], a
-    ld a, [PlayerPadTopYPos]
-    inc a
+    sub a, 8
     ld [PlayerPadTopYPos], a
 
 .popret:
+    pop hl
+    pop bc
     pop af
     ret
 
