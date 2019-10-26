@@ -25,7 +25,10 @@ def sprite(path):
             bytes2.append([])
 
         # TODO make this fancier when I actually want color sprites.
-        r, g, b = pixels
+        if len(pixels) == 3:
+            r, g, b = pixels
+        elif len(pixels) == 4:
+            r, g, b, _ = pixels
 
         # Only check the red channel bc lazy
         if r == 255:

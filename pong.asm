@@ -21,6 +21,10 @@ PlayerPadTopYPos     RB 1
 PlayerPadTopXPos     RB 1
 PlayerPadTopTileNum  RB 1
 PlayerPadTopAttrs    RB 1
+PlayerPadMidYPos     RB 1
+PlayerPadMidXPos     RB 1
+PlayerPadMidTileNum  RB 1
+PlayerPadMidAttrs    RB 1
 PlayerPadBotYPos     RB 1
 PlayerPadBotXPos     RB 1
 PlayerPadBotTileNum  RB 1
@@ -35,6 +39,7 @@ _BallSpeedX    RB 1
 _BallYDir      RB 1               ; 1 is down
 _BallXDir      RB 1               ; 1 is right
 _MaxBallSpeed  RB 1
+_MinBallSpeed  RB 1
 _P1PadSpeed    RB 1
 
 
@@ -124,16 +129,25 @@ initsprite:
     ld a, %00000000
     ld [PlayerPadTopAttrs], a
 
-    ld a, 88                      ; and paddle bottom
+    ld a, 88                      ; and paddle mid
+    ld [PlayerPadMidYPos], a
+    ld a, 16
+    ld [PlayerPadMidXPos], a
+    ld a, 3
+    ld [PlayerPadMidTileNum], a
+    ld a, %00000000
+    ld [PlayerPadMidAttrs], a
+
+    ld a, 96                      ; and paddle bottom
     ld [PlayerPadBotYPos], a
     ld a, 16
     ld [PlayerPadBotXPos], a
-    ld a, 3
+    ld a, 4
     ld [PlayerPadBotTileNum], a
     ld a, %00000000
     ld [PlayerPadBotAttrs], a
 
-    ld a, 2
+    ld a, 1
     ld [_BallSpeedY], a
     ld a, 1
     ld [_BallSpeedX], a
@@ -234,39 +248,137 @@ moveball:
     ret
 
 
-checkballbouncex:
-    push af
+; check just collision between ball and either wall
+checkballwallcolx
+    push bc
 
-    ; switch vel if we hit left wall
 .left
     ld a, [BallXPos]
-    cp LEFTBORDER                ; compare with left edge to see if we should skip move
+    cp LEFTBORDER
     jr nz, .right
 
-    ; AND we are moving left
     ld a, [_BallXDir]
     cp 0
     jr nz, .right
-
-    ; then swap vel
     ld a, 1
-    ld [_BallXDir], a
-    jp .popret                  ; if we hit the left wall, we won't hit the right one.
+    jp .popret
 
-; CHECK FOR RIGHT BOUNCE
 .right
     ld a, [BallXPos]
     cp RIGHTBORDER
-    jr nz, .popret
+    jr nz, .none
 
     ld a, [_BallXDir]
     cp 1
-    jr nz, .popret
+    jr nz, .none
+    ld a, 2
+    jp .popret
 
+.none
     ld a, 0
-    ld [_BallXDir], a
+    jp .popret
 
 .popret
+    pop bc
+    ret
+
+
+; check ball bounce against p1 paddle
+checkballp1padcolx
+    push bc
+
+    ; check we're within the x bounds,
+    ; then the y bounds of the paddle
+    ld a, [BallXPos]
+    ld b, a
+    ld a, [PlayerPadTopXPos]
+    add a, 8
+    sub a, b
+    jr c, .nocol                        ; not past the x of the paddle
+
+    ld a, [BallXPos]
+    ld b, a
+    ld a, [PlayerPadTopXPos]
+    sub a, 8
+    sub a, b
+    jr c, .nocol                        ; not behind the back of the paddle
+
+    ; repeat with y bounds
+    ld a, [BallYPos]
+    ld b, a
+    ld a, [PlayerPadTopYPos]
+    sub a, b
+    jr nc, .nocol                       ; not past the y of the paddle
+
+    ld a, [BallYPos]
+    ld b, a
+    ld a, [PlayerPadBotYPos]
+    add a, 8
+    sub a, b
+    jr c, .nocol                        ; not inside the paddle
+
+    ; speed it up, not past max
+    ld a, [_BallSpeedX]
+    inc a
+
+    ld b, a
+    ld a, [_MaxBallSpeed]
+    sub a, b
+    jr nc, .nofix
+    ld a, [_MaxBallSpeed]
+
+.nofix
+    ld [_BallSpeedX], a
+
+.col
+    ld a, 1
+    jp .popret
+
+.nocol
+    ld a, 0
+    jp .popret
+
+.popret
+    pop bc
+    ret
+
+
+checkballbouncex:
+    push af
+    push bc
+    push hl
+
+    ; check wall collisions
+    call checkballwallcolx
+    cp 0                         ; no wall collision
+    jr z, .checkp1pad
+    cp 1                         ; left wall collision
+    jr z, .setright
+    jp .setleft                  ; right wall collision
+
+.checkp1pad
+    call checkballp1padcolx
+    cp 0
+    jr z, .popret                   ; no collision
+    cp 1
+    jr z, .setright              ; right collision
+    jp .setleft                  ; left collision
+
+.setleft
+    ld a, 0
+    jp .velswap
+
+.setright
+    ld a, 1
+    jp .velswap
+
+.velswap
+    ld [_BallXDir], a
+    jp .popret
+
+.popret
+    pop hl
+    pop bc
     pop af
     ret
 
@@ -304,7 +416,7 @@ checkballbouncey:
     ret
 
 
-doballxmove
+doballxmove:
     push af
     push bc
     push hl
@@ -318,66 +430,113 @@ doballxmove
     ld a, [_BallXDir]
     cp 1
     jr z, .moveright
+    call doballleftmove
+    jp .popret
 
-.left
+.moveright
+    call doballrightmove
+
+.popret
+    pop hl
+    pop bc
+    pop af
+    ret
+
+
+doballleftmove:
+    push af
+    push bc
+    push hl
+
     ld a, [BallXPos]
     ld b, a
     ld a, [_BallSpeedX]
 
-.loopleft
+.loop
     dec b
 
     ; leave loop if counter runs out.
     dec a
     cp 0
-    jr z, .loopleftdone
+    jr z, .loopdone
 
     ; bounce early if dec would take us out of bounds
     ld l, a
     ld a, b
     sub a, LEFTBORDER
-    jr nc, .nofixleft
+    jr nc, .nofix
+
+.fixpos
     ld a, LEFTBORDER
     ld b, a
-    jp .loopleftdone
+    jp .loopdone
 
-.nofixleft
+.nofix
+
+.playerbounce
+    ; also bounce off player paddle!
+    ld a, [PlayerPadTopXPos]
+
+    sub a, b
+    jr nc, .loopdone
+
+    ld a, [BallYPos]
+    ld b, a
+    ld a, [PlayerPadTopYPos]
+
+    sub a, b
+    jr nc, .loopdone
+
+    ld a, [PlayerPadBotYPos]
+
+    sub a, b
+    jr c, .loopdone
+
     ld a, l
-    jp .loopleft
+    jp .loop
 
-.loopleftdone
+.loopdone
     ld a, b
     ld [BallXPos], a
-    jp .popret
 
-; RIGHT
-.moveright
+.popret
+    pop hl
+    pop bc
+    pop af
+    ret
+
+
+doballrightmove:
+    push af
+    push bc
+    push hl
+
     ld a, [BallXPos]
     ld b, a
     ld a, [_BallSpeedX]
 
-.loopright
+.loop
     inc b
 
     ; leave loop if counter runs out.
     dec a
     cp 0
-    jr z, .looprightdone
+    jr z, .loopdone
 
     ; bounce early if dec would take us out of bounds
     ld l, a
     ld a, RIGHTBORDER
-    sub a, b
-    jr nc, .nofixright
+    sub b
+    jr nc, .nofix
     ld a, RIGHTBORDER
     ld b, a
-    jp .looprightdone
+    jp .loopdone
 
-.nofixright
+.nofix
     ld a, l
-    jp .loopright
+    jp .loop
 
-.looprightdone
+.loopdone
     ld a, b
     ld [BallXPos], a
 
@@ -393,12 +552,6 @@ doballymove:
     push bc
     push hl
 
-.up
-    ; abort if vx is zero.
-    ld a, [_BallSpeedY]
-    cp 0
-    jr z, .popret
-
     ld a, [_BallSpeedY]
     cp 0
     jr z, .popret
@@ -407,66 +560,51 @@ doballymove:
     cp 1
     jr z, .movedown
 
-; UP
-.moveup
+    call doballupmove
+    jp .popret
+
+.movedown
+    call doballdownmove
+
+.popret
+    pop hl
+    pop bc
+    pop af
+    ret
+
+
+doballupmove:
+    push af
+    push bc
+    push hl
+
     ld a, [BallYPos]
     ld b, a
     ld a, [_BallSpeedY]
 
-.loopup
+.loop
     dec b
 
     ; leave loop if counter runs out.
     dec a
     cp 0
-    jr z, .loopupdone
+    jr z, .loopdone
 
     ld l, a
     ld a, b
 
     ; bounce early if dec would take us out of bounds
     sub a, TOPBORDER
-    jr nc, .nofixup
+    jr nc, .nofix
     ld a, TOPBORDER
     ld b, a
-    jp .loopupdone
+    jp .loopdone
 
-.nofixup
+.nofix
     ld a, l
-    jp .loopup
+    jp .loop
 
-.loopupdone
-    ld a, b
-    ld [BallYPos], a
-    jp .popret
-
-.movedown
-    ld a, [BallYPos]
-    ld b, a
-    ld a, [_BallSpeedY]
-
-.loopdown
-    inc b
-
-    ; leave loop if counter runs out.
-    dec a
-    cp 0
-    jr z, .loopdowndone
-
-    ; bounce early if dec would take us out of bounds
-    ld l, a
-    ld a, BOTTOMBORDER
-    sub a, b
-    jr nc, .nofixdown
-    ld a, BOTTOMBORDER
-    ld b, a
-    jp .loopdowndone
-
-.nofixdown
-    ld a, l
-    jp .loopdown
-
-.loopdowndone
+.loopdone
     ld a, b
     ld [BallYPos], a
 
@@ -477,7 +615,48 @@ doballymove:
     ret
 
 
-p1moveleft:                     ; left and right are nice because top/bot share an xpos.
+doballdownmove:
+    push af
+    push bc
+    push hl
+
+    ld a, [BallYPos]
+    ld b, a
+    ld a, [_BallSpeedY]
+
+.loop
+    inc b
+
+    ; leave loop if counter runs out.
+    dec a
+    cp 0
+    jr z, .loopdone
+
+    ; bounce early if dec would take us out of bounds
+    ld l, a
+    ld a, BOTTOMBORDER
+    sub a, b
+    jr nc, .nofix
+    ld a, BOTTOMBORDER
+    ld b, a
+    jp .loopdone
+
+.nofix
+    ld a, l
+    jp .loop
+
+.loopdone
+    ld a, b
+    ld [BallYPos], a
+
+.popret
+    pop hl
+    pop bc
+    pop af
+    ret
+
+
+p1moveleft:               ; left and right are nice because top/bot share an xpos.
     push af
     push bc
     push hl
@@ -509,6 +688,7 @@ p1moveleft:                     ; left and right are nice because top/bot share 
 .loopdone
     ld a, b
     ld [PlayerPadTopXPos], a
+    ld [PlayerPadMidXPos], a
     ld [PlayerPadBotXPos], a
 
 .popret:
@@ -550,6 +730,7 @@ p1moveright:
 .loopdone
     ld a, b
     ld [PlayerPadTopXPos], a
+    ld [PlayerPadMidXPos], a
     ld [PlayerPadBotXPos], a
 
 .popret:
@@ -592,6 +773,8 @@ p1moveup:
     ld a, b
     ld [PlayerPadTopYPos], a
     add a, 8
+    ld [PlayerPadMidYPos], a
+    add a, 8
     ld [PlayerPadBotYPos], a
 
 .popret:
@@ -633,6 +816,8 @@ p1movedown:
 .loopdone
     ld a, b
     ld [PlayerPadBotYPos], a
+    sub a, 8
+    ld [PlayerPadMidYPos], a
     sub a, 8
     ld [PlayerPadTopYPos], a
 
@@ -695,5 +880,5 @@ StartLCD:
     ret
 
 
-Sprites: {{ sprites("blank", "ball", "ppadtop", "ppadbot") }}
+Sprites: {{ sprites("blank", "ball", "ppadtop", "ppadmid", "ppadbot") }}
 SpritesEnd:
