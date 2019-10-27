@@ -245,6 +245,7 @@ ballinplayerpaddle:
     jr nc, .nocol
 
     ld a, [PlayerPadTopXPos]
+    add 1
     sub b
     jr c, .nocol
 
@@ -257,6 +258,7 @@ ballinplayerpaddle:
     jr nc, .nocol
 
     ld a, [PlayerPadBotYPos]
+    add 1
     sub b
     jr c, .nocol
 
@@ -434,7 +436,7 @@ doballleftmove:
     ; will return 1 if we did precollision.
     call checkperformprecollx
     cp 1
-    jr z, .loopdone     ; we've already done all the movement we need.
+    jr z, .popret     ; we've already done all the movement we need.
 
 .noprecoll
     ld a, 1
@@ -522,7 +524,7 @@ doballrightmove:
 .fixpospaddle
     call checkperformprecollx
     cp 1
-    jr z, .loopdone
+    jr z, .popret
 
     ld a, 0
     ld [_BallXDir], a
@@ -637,7 +639,7 @@ doballupmove:
     ; will return 1 if we did precollision.
     call checkperformprecolly
     cp 1
-    jr z, .loopdone     ; we've already done all the movement we need.
+    jr z, .popret     ; we've already done all the movement we need.
 
     ld a, 1
     ld [_BallYDir], a
@@ -727,7 +729,7 @@ doballdownmove:
     ; will return 1 if we did precollision.
     call checkperformprecolly
     cp 1
-    jr z, .loopdone     ; we've already done all the movement we need.
+    jr z, .popret     ; we've already done all the movement we need.
 
     ld a, 0
     ld [_BallYDir], a
@@ -761,9 +763,11 @@ checkperformprecollx:
     ; check player movement - only left and right matter.
     ld a, [_INPUT]                ; load input
 
+    push af
     and PADF_LEFT                 ; see if left is pressed...
-    jr nz, .noleft
+    jr z, .noleft
 
+    pop af
     ; bounce left, faster.
     ld a, 0
     ld [_BallXDir], a
@@ -779,14 +783,15 @@ checkperformprecollx:
     jp .popret
 
 .noleft
+    pop af
     and PADF_RIGHT              ; ...right
-    jr nz, .noprecoll           ; ignore collision if player moved up and moved into us.
+    jr z, .noprecoll            ; ignore collision for up or down.
                                 ; y branch will handle that.
     ld a, 1
     ld [_BallXDir], a
 
     ld a, [PlayerPadMidXPos]
-    add 1
+    add 8
     ld [BallXPos], a
 
     call speedballxup
@@ -811,10 +816,12 @@ checkperformprecolly:
     ; here, just up and down
     ld a, [_INPUT]                ; load input
 
+    push af
     and PADF_UP
     jr nz, .noup
 
     ; bounce up, faster.
+    pop af
     ld a, 0
     ld [_BallYDir], a
 
@@ -827,6 +834,7 @@ checkperformprecolly:
     jp .popret
 
 .noup
+    pop af
     and PADF_DOWN
     jr nz, .noprecoll
 
@@ -853,15 +861,21 @@ speedballxup:
     push af
     push bc
 
+    ; TODO stop being lazy and do a loop here too.
     ld a, [_BallSpeedX]
+    add 1
+    add 1
+
     ld b, a
     ld a, [_MaxBallSpeed]
+    sub b
+    jr nc, .nofix
 
-    cp b
-    jr z, .popret
+    ld a, [_MaxBallSpeed]
+    ld b, a
 
+.nofix
     ld a, b
-    add 1
     ld [_BallSpeedX], a
 
 .popret
@@ -897,15 +911,21 @@ speedballyup:
     push af
     push bc
 
+    ; TODO stop being lazy and do a loop here too.
     ld a, [_BallSpeedY]
+    add 1
+    add 1
+
     ld b, a
     ld a, [_MaxBallSpeed]
+    sub b
+    jr nc, .nofix
 
-    cp b
-    jr z, .popret
+    ld a, [_MaxBallSpeed]
+    ld b, a
 
+.nofix
     ld a, b
-    add 1
     ld [_BallSpeedY], a
 
 .popret
