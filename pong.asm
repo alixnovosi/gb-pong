@@ -157,6 +157,8 @@ initsprite:
     ld [_BallXDir], a
     ld a, 5
     ld [_MaxBallSpeed], a
+    ld a, 1
+    ld [_MinBallSpeed], a
     ld a, 2
     ld [_P1PadSpeed], a
 
@@ -230,105 +232,33 @@ getinput:
     ret
 
 
-moveball:
-    push af
+; leaves 1 or 0 in a.
+ballinplayerpaddle:
     push bc
-    push hl
-
-    call checkballbouncex
-    call checkballbouncey
-
-    call doballxmove
-    call doballymove
-
-.popret
-    pop hl
-    pop bc
-    pop af
-    ret
-
-
-; check just collision between ball and either wall
-checkballwallcolx
-    push bc
-
-.left
-    ld a, [BallXPos]
-    cp LEFTBORDER
-    jr nz, .right
-
-    ld a, [_BallXDir]
-    cp 0
-    jr nz, .right
-    ld a, 1
-    jp .popret
-
-.right
-    ld a, [BallXPos]
-    cp RIGHTBORDER
-    jr nz, .none
-
-    ld a, [_BallXDir]
-    cp 1
-    jr nz, .none
-    ld a, 2
-    jp .popret
-
-.none
-    ld a, 0
-    jp .popret
-
-.popret
-    pop bc
-    ret
-
-
-; check ball bounce against p1 paddle
-checkballp1padcolx
-    push bc
-
-    ; check we're within the x bounds,
-    ; then the y bounds of the paddle
-    ld a, [BallXPos]
-    ld b, a
-    ld a, [PlayerPadTopXPos]
-    add a, 8
-    sub a, b
-    jr c, .nocol                        ; not past the x of the paddle
 
     ld a, [BallXPos]
     ld b, a
-    ld a, [PlayerPadTopXPos]
-    sub a, 8
-    sub a, b
-    jr c, .nocol                        ; not behind the back of the paddle
 
-    ; repeat with y bounds
+    ld a, [PlayerPadTopXPos]     ; we (unfortunately) need to compare to four different bounds.
+    sub 8
+    sub b
+    jr nc, .nocol
+
+    ld a, [PlayerPadTopXPos]
+    sub b
+    jr c, .nocol
+
     ld a, [BallYPos]
     ld b, a
+
     ld a, [PlayerPadTopYPos]
-    sub a, b
-    jr nc, .nocol                       ; not past the y of the paddle
+    sub 8
+    sub b
+    jr nc, .nocol
 
-    ld a, [BallYPos]
-    ld b, a
     ld a, [PlayerPadBotYPos]
-    add a, 8
-    sub a, b
-    jr c, .nocol                        ; not inside the paddle
-
-    ; speed it up, not past max
-    ld a, [_BallSpeedX]
-    inc a
-
-    ld b, a
-    ld a, [_MaxBallSpeed]
-    sub a, b
-    jr nc, .nofix
-    ld a, [_MaxBallSpeed]
-
-.nofix
-    ld [_BallSpeedX], a
+    sub b
+    jr c, .nocol
 
 .col
     ld a, 1
@@ -336,82 +266,75 @@ checkballp1padcolx
 
 .nocol
     ld a, 0
+
+.popret
+    pop bc
+    ret
+
+; same
+balloobx:
+    push bc
+
+    ld a, [BallXPos]
+    ld b, a
+
+    ld a, LEFTBORDER
+    sub b
+    jr nc, .col
+
+    ld a, RIGHTBORDER
+    sub b
+    jr c, .col
+
+.nocol
+    ld a, 0
     jp .popret
+
+.col
+    ld a, 1
 
 .popret
     pop bc
     ret
 
 
-checkballbouncex:
+ballooby:
+    push bc
+
+    ld a, [BallYPos]
+    ld b, a
+
+    ld a, TOPBORDER
+    sub b
+    jr nc, .col
+
+    ld a, BOTTOMBORDER
+    cp b
+    jr c, .col
+
+.nocol
+    ld a, 0
+    jp .popret
+
+.col
+    ld a, 1
+
+.popret
+    pop bc
+    ret
+
+
+moveball:
     push af
     push bc
     push hl
 
-    ; check wall collisions
-    call checkballwallcolx
-    cp 0                         ; no wall collision
-    jr z, .checkp1pad
-    cp 1                         ; left wall collision
-    jr z, .setright
-    jp .setleft                  ; right wall collision
-
-.checkp1pad
-    call checkballp1padcolx
-    cp 0
-    jr z, .popret                   ; no collision
-    cp 1
-    jr z, .setright              ; right collision
-    jp .setleft                  ; left collision
-
-.setleft
-    ld a, 0
-    jp .velswap
-
-.setright
-    ld a, 1
-    jp .velswap
-
-.velswap
-    ld [_BallXDir], a
-    jp .popret
+    call doballxmove
+    call doballymove
 
 .popret
     pop hl
     pop bc
-    pop af
-    ret
-
-
-checkballbouncey:
-    push af
-
-.up
-    ld a, [BallYPos]
-    cp TOPBORDER
-    jr nz, .down
-
-    ld a, [_BallYDir]
-    cp 0
-    jr nz, .down
-
-    ld a, 1
-    ld [_BallYDir], a
-    jp .popret
-
-.down
-    ld a, [BallYPos]
-    cp BOTTOMBORDER
-    jr nz, .popret
-
-    ld a, [_BallYDir]
-    cp 1
-    jr nz, .popret
-
-    ld a, 0
-    ld [_BallYDir], a
-
-.popret
     pop af
     ret
 
@@ -429,11 +352,13 @@ doballxmove:
 
     ld a, [_BallXDir]
     cp 1
-    jr z, .moveright
+    jr z, .right
+
+.left
     call doballleftmove
     jp .popret
 
-.moveright
+.right
     call doballrightmove
 
 .popret
@@ -446,7 +371,21 @@ doballxmove:
 doballleftmove:
     push af
     push bc
+    push de
     push hl
+
+    ; figure out if we collide BEFORE we move.
+    ; this indicates the paddle moved into us,
+    ; which might not change our movement, but may also reflect the ball.
+    call ballinplayerpaddle
+    cp 1
+    ; store precoll flag (TODO use bits, ever).
+    jr z, .setup
+
+    ld a, 0
+
+.setup
+    ld d, a
 
     ld a, [BallXPos]
     ld b, a
@@ -454,46 +393,58 @@ doballleftmove:
 
 .loop
     dec b
+    dec a
+
+    ; do various collisions
+    ld l, a
+
+    ld a, b
+    ld [BallXPos], a
+
+    call balloobx
+    cp 1
+    jr z, .fixposwall
+
+    call ballinplayerpaddle
+    cp 1
+    jr z, .fixpospaddle
 
     ; leave loop if counter runs out.
-    dec a
+.postcollcheck
+    ld a, l
     cp 0
     jr z, .loopdone
 
-    ; bounce early if dec would take us out of bounds
-    ld l, a
-    ld a, b
-    sub a, LEFTBORDER
-    jr nc, .nofix
+    jp .loop
 
-.fixpos
+; any fix means we hit something and the movement loop should end.
+.fixposwall
+    ld a, 1
+    ld [_BallXDir], a
+
     ld a, LEFTBORDER
+    add 1
     ld b, a
+
+    call slowballxdown
+
     jp .loopdone
 
-.nofix
+.fixpospaddle
+    ; will return 1 if we did precollision.
+    call checkperformprecollx
+    cp 1
+    jr z, .loopdone     ; we've already done all the movement we need.
 
-.playerbounce
-    ; also bounce off player paddle!
-    ld a, [PlayerPadTopXPos]
+.noprecoll
+    ld a, 1
+    ld [_BallXDir], a
 
-    sub a, b
-    jr nc, .loopdone
-
-    ld a, [BallYPos]
+    ld a, [PlayerPadMidXPos]
+    add 9
     ld b, a
-    ld a, [PlayerPadTopYPos]
 
-    sub a, b
-    jr nc, .loopdone
-
-    ld a, [PlayerPadBotYPos]
-
-    sub a, b
-    jr c, .loopdone
-
-    ld a, l
-    jp .loop
+    jp .loopdone
 
 .loopdone
     ld a, b
@@ -501,6 +452,7 @@ doballleftmove:
 
 .popret
     pop hl
+    pop de
     pop bc
     pop af
     ret
@@ -509,7 +461,21 @@ doballleftmove:
 doballrightmove:
     push af
     push bc
+    push de
     push hl
+
+    ; figure out if we collide BEFORE we move.
+    ; this indicates the paddle moved into us,
+    ; which might not change our movement, but may also reflect the ball.
+    call ballinplayerpaddle
+    cp 1
+    ; store precoll flag (TODO use bits, ever).
+    jr z, .setup
+
+    ld a, 0
+
+.setup
+    ld d, a
 
     ld a, [BallXPos]
     ld b, a
@@ -517,24 +483,55 @@ doballrightmove:
 
 .loop
     inc b
+    dec a
+
+    ; do various collisions
+    ld l, a
+
+    ld a, b
+    ld [BallXPos], a
+
+    call balloobx
+    cp 1
+    jr z, .fixposwall
+
+    call ballinplayerpaddle
+    cp 1
+    jr z, .fixpospaddle
 
     ; leave loop if counter runs out.
-    dec a
+    ld a, l
     cp 0
     jr z, .loopdone
 
-    ; bounce early if dec would take us out of bounds
-    ld l, a
+    jp .loop
+
+; any fix means we hit something and the movement loop should end.
+.fixposwall
+    ld a, 0
+    ld [_BallXDir], a
+
     ld a, RIGHTBORDER
-    sub b
-    jr nc, .nofix
-    ld a, RIGHTBORDER
+    sub 1
     ld b, a
+
+    call slowballxdown
+
     jp .loopdone
 
-.nofix
-    ld a, l
-    jp .loop
+.fixpospaddle
+    call checkperformprecollx
+    cp 1
+    jr z, .loopdone
+
+    ld a, 0
+    ld [_BallXDir], a
+
+    ld a, [PlayerPadMidXPos]
+    sub 9
+    ld b, a
+
+    jp .loopdone
 
 .loopdone
     ld a, b
@@ -542,6 +539,7 @@ doballrightmove:
 
 .popret
     pop hl
+    pop de
     pop bc
     pop af
     ret
@@ -558,12 +556,13 @@ doballymove:
 
     ld a, [_BallYDir]
     cp 1
-    jr z, .movedown
+    jr z, .down
 
+.up
     call doballupmove
     jp .popret
 
-.movedown
+.down
     call doballdownmove
 
 .popret
@@ -576,7 +575,21 @@ doballymove:
 doballupmove:
     push af
     push bc
+    push de
     push hl
+
+    ; figure out if we collide BEFORE we move.
+    ; this indicates the paddle moved into us,
+    ; which might not change our movement, but may also reflect the ball.
+    call ballinplayerpaddle
+    cp 1
+    ; store precoll flag (TODO use bits, ever).
+    jr z, .setup
+
+    ld a, 0
+
+.setup
+    ld d, a
 
     ld a, [BallYPos]
     ld b, a
@@ -584,25 +597,56 @@ doballupmove:
 
 .loop
     dec b
+    dec a
+
+    ; do various collisions
+    ld l, a
+
+    ld a, b
+    ld [BallYPos], a
+
+    call ballooby
+    cp 1
+    jr z, .fixposwall
+
+    call ballinplayerpaddle
+    cp 1
+    jr z, .fixpospaddle
 
     ; leave loop if counter runs out.
-    dec a
+    ld a, l
     cp 0
     jr z, .loopdone
 
-    ld l, a
-    ld a, b
+    jp .loop
 
-    ; bounce early if dec would take us out of bounds
-    sub a, TOPBORDER
-    jr nc, .nofix
+; any fix means we hit something and the movement loop should end.
+.fixposwall
+    ld a, 1
+    ld [_BallYDir], a
+
     ld a, TOPBORDER
+    add 1
     ld b, a
+
+    call slowballydown
+
     jp .loopdone
 
-.nofix
-    ld a, l
-    jp .loop
+.fixpospaddle
+    ; will return 1 if we did precollision.
+    call checkperformprecolly
+    cp 1
+    jr z, .loopdone     ; we've already done all the movement we need.
+
+    ld a, 1
+    ld [_BallYDir], a
+
+    ld a, [PlayerPadBotYPos]
+    add 9
+    ld b, a
+
+    jp .loopdone
 
 .loopdone
     ld a, b
@@ -610,6 +654,7 @@ doballupmove:
 
 .popret
     pop hl
+    pop de
     pop bc
     pop af
     ret
@@ -618,7 +663,21 @@ doballupmove:
 doballdownmove:
     push af
     push bc
+    push de
     push hl
+
+    ; figure out if we collide BEFORE we move.
+    ; this indicates the paddle moved into us,
+    ; which might not change our movement, but may also reflect the ball.
+    call ballinplayerpaddle
+    cp 1
+    ; store precoll flag (TODO use bits, ever).
+    jr z, .setup
+
+    ld a, 0
+
+.setup
+    ld d, a
 
     ld a, [BallYPos]
     ld b, a
@@ -626,24 +685,58 @@ doballdownmove:
 
 .loop
     inc b
-
-    ; leave loop if counter runs out.
     dec a
-    cp 0
-    jr z, .loopdone
 
-    ; bounce early if dec would take us out of bounds
+    ; do various collisions
     ld l, a
-    ld a, BOTTOMBORDER
-    sub a, b
-    jr nc, .nofix
-    ld a, BOTTOMBORDER
-    ld b, a
-    jp .loopdone
+
+    ld a, b
+    ld [BallYPos], a
+
+    call ballooby
+    cp 1
+    jr z, .fixposwall
+
+    call ballinplayerpaddle
+    cp 1
+    jr z, .fixpospaddle
 
 .nofix
     ld a, l
+
+    ; leave loop if counter runs out.
+    cp 0
+    jr z, .loopdone
+
     jp .loop
+
+; any fix means we hit something and the movement loop should end.
+.fixposwall
+    ld a, 0
+    ld [_BallYDir], a
+
+    ld a, BOTTOMBORDER
+    sub 1
+    ld b, a
+
+    call slowballydown
+
+    jp .loopdone
+
+.fixpospaddle
+    ; will return 1 if we did precollision.
+    call checkperformprecolly
+    cp 1
+    jr z, .loopdone     ; we've already done all the movement we need.
+
+    ld a, 0
+    ld [_BallYDir], a
+
+    ld a, [PlayerPadTopYPos]
+    sub 1
+    ld b, a
+
+    jp .loopdone
 
 .loopdone
     ld a, b
@@ -651,6 +744,193 @@ doballdownmove:
 
 .popret
     pop hl
+    pop de
+    pop bc
+    pop af
+    ret
+
+
+; check if we had collision before we started moving and if so,
+; do something about that.
+checkperformprecollx:
+    ; check precoll flag
+    ld a, d
+    cp 1
+    jr nz, .noprecoll
+
+    ; check player movement - only left and right matter.
+    ld a, [_INPUT]                ; load input
+
+    and PADF_LEFT                 ; see if left is pressed...
+    jr nz, .noleft
+
+    ; bounce left, faster.
+    ld a, 0
+    ld [_BallXDir], a
+
+    ld a, [PlayerPadMidXPos]
+    sub 9
+    ld [BallXPos], a
+
+    call speedballxup
+
+    ld a, 1
+
+    jp .popret
+
+.noleft
+    and PADF_RIGHT              ; ...right
+    jr nz, .noprecoll           ; ignore collision if player moved up and moved into us.
+                                ; y branch will handle that.
+    ld a, 1
+    ld [_BallXDir], a
+
+    ld a, [PlayerPadMidXPos]
+    add 1
+    ld [BallXPos], a
+
+    call speedballxup
+
+    ld a, 1
+
+    jp .popret
+
+.noprecoll
+    ld a, 0
+
+.popret
+    ret
+
+
+; same for y
+checkperformprecolly:
+    ld a, d
+    cp 1
+    jr nz, .noprecoll
+
+    ; here, just up and down
+    ld a, [_INPUT]                ; load input
+
+    and PADF_UP
+    jr nz, .noup
+
+    ; bounce up, faster.
+    ld a, 0
+    ld [_BallYDir], a
+
+    ld a, [PlayerPadTopYPos]
+    sub 1
+    ld [BallYPos], a
+
+    ld a, 1
+
+    jp .popret
+
+.noup
+    and PADF_DOWN
+    jr nz, .noprecoll
+
+    ld a, 0
+    ld [_BallYDir], a
+
+    ld a, [PlayerPadBotYPos]
+    add 9
+    ld [BallYPos], a
+
+    ld a, 1
+
+    jp .popret
+
+.noprecoll
+    ld a, 0
+
+.popret
+    ret
+
+
+; speed ball up, but stay under max speed.
+speedballxup:
+    push af
+    push bc
+
+    ld a, [_BallSpeedX]
+    ld b, a
+    ld a, [_MaxBallSpeed]
+
+    cp b
+    jr z, .popret
+
+    ld a, b
+    add 1
+    ld [_BallSpeedX], a
+
+.popret
+    pop bc
+    pop af
+    ret
+
+
+; slow ball down, but stay under min speed.
+slowballxdown:
+    push af
+    push bc
+
+    ld a, [_BallSpeedX]
+    ld b, a
+    ld a, [_MinBallSpeed]
+
+    cp b
+    jr z, .popret
+
+    ld a, b
+    sub 1
+    ld [_BallSpeedX], a
+
+.popret
+    pop bc
+    pop af
+    ret
+
+
+; speed ball up, but stay under max speed.
+speedballyup:
+    push af
+    push bc
+
+    ld a, [_BallSpeedY]
+    ld b, a
+    ld a, [_MaxBallSpeed]
+
+    cp b
+    jr z, .popret
+
+    ld a, b
+    add 1
+    ld [_BallSpeedY], a
+
+.popret
+    pop bc
+    pop af
+    ret
+
+
+; same for y
+slowballydown:
+    push af
+    push bc
+
+    ld a, [_BallSpeedY]
+    ld b, a
+    ld a, [_MinBallSpeed]
+
+    cp b
+    jr z, .popret
+
+    ld a, b
+    sub 1
+    ld [_BallSpeedY], a
+
+.popret
     pop bc
     pop af
     ret
