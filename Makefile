@@ -5,9 +5,9 @@ PREPROC=$(VIRTUALENV); $(PYTHON) utils/preprocessor.py
 
 ASM=rgbasm -iincludes/
 LINK=rgblink
-FIX=rgbfix
+FIX=rgbfix -C
 
-TYPE=gb
+TYPE=gbc
 
 EMU=binjgb
 DEBUG=binjgb-debugger

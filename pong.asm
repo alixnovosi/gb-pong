@@ -1,4 +1,4 @@
-INCLUDE "includes/gbhw.inc"
+INCLUDE "includes/gbhw.asm"
 
 _DMACODE EQU $FF80
 _OAMDATA EQU _RAM                 ; Must be a multiple of $100
@@ -11,6 +11,8 @@ TOPBORDER EQU 8+8
 BOTTOMBORDER EQU 144+8
 
 PADSPEED EQU 2
+MINBALLSPEED EQU 1
+MAXBALLSPEED EQU 7
 
                      RSSET _OAMDATA     ; Base location is _OAMDATA
 BallYPos             RB 1               ; Set each to an incrementing location
@@ -38,8 +40,6 @@ _BallSpeedY    RB 1
 _BallSpeedX    RB 1
 _BallYDir      RB 1               ; 1 is down
 _BallXDir      RB 1               ; 1 is right
-_MaxBallSpeed  RB 1
-_MinBallSpeed  RB 1
 _P1PadSpeed    RB 1
 
 
@@ -89,11 +89,20 @@ main:
 
 
 initscreen:
-    ld a, %11100100               ; Palette colors, darkest to lightest
+    ; greyscale palette
+    ld a, %01100100
+    ld [rBGP], a
 
-    ld [rBGP], a                  ; Set background palette
-    ldh [rOBP0], a                ; Set sprite palette 0
-    ldh [rOBP1], a                ; And palette 1
+    ld a, %10000000
+    ld [rOCPS], a
+
+    ; load multiple palettes
+    ld hl, Palettes
+
+    REPT 32
+    ld a, [hl+]
+    ldh [rOCPD], a
+    ENDR
 
     call StopLCD                  ; Need to stop LCD before loading vram
 
@@ -102,7 +111,7 @@ initscreen:
     ld bc, 16*(SpritesEnd-Sprites)
     call mem_Copy
 
-    ld a, 0                       ; Clear sprite table
+    xor a                         ; Clear sprite table
     ld hl, _OAMDATA
     ld bc, _OAMDATALENGTH
     call mem_Set
@@ -117,7 +126,7 @@ initsprite:
     ld [BallXPos], a
     ld a, 1
     ld [BallTileNum], a
-    ld a, %00000000
+    ld a, %00000001
     ld [BallAttrs], a
 
     ld a, 80                      ; and paddle
@@ -126,7 +135,7 @@ initsprite:
     ld [PlayerPadTopXPos], a
     ld a, 2
     ld [PlayerPadTopTileNum], a
-    ld a, %00000000
+    ld a, %00000010
     ld [PlayerPadTopAttrs], a
 
     ld a, 88                      ; and paddle mid
@@ -135,16 +144,16 @@ initsprite:
     ld [PlayerPadMidXPos], a
     ld a, 3
     ld [PlayerPadMidTileNum], a
-    ld a, %00000000
+    ld a, %00000010
     ld [PlayerPadMidAttrs], a
 
     ld a, 96                      ; and paddle bottom
     ld [PlayerPadBotYPos], a
     ld a, 16
     ld [PlayerPadBotXPos], a
-    ld a, 4
+    ld a, 2
     ld [PlayerPadBotTileNum], a
-    ld a, %00000000
+    ld a, %01000010
     ld [PlayerPadBotAttrs], a
 
     ld a, 1
@@ -155,10 +164,6 @@ initsprite:
     ld [_BallYDir], a
     ld a, 1
     ld [_BallXDir], a
-    ld a, 5
-    ld [_MaxBallSpeed], a
-    ld a, 1
-    ld [_MinBallSpeed], a
     ld a, 2
     ld [_P1PadSpeed], a
 
@@ -267,7 +272,7 @@ ballinplayerpaddle:
     jp .popret
 
 .nocol
-    ld a, 0
+    xor a
 
 .popret
     pop bc
@@ -289,7 +294,7 @@ balloobx:
     jr c, .col
 
 .nocol
-    ld a, 0
+    xor a
     jp .popret
 
 .col
@@ -315,7 +320,7 @@ ballooby:
     jr c, .col
 
 .nocol
-    ld a, 0
+    xor a
     jp .popret
 
 .col
@@ -384,7 +389,7 @@ doballleftmove:
     ; store precoll flag (TODO use bits, ever).
     jr z, .setup
 
-    ld a, 0
+    xor a
 
 .setup
     ld d, a
@@ -474,7 +479,7 @@ doballrightmove:
     ; store precoll flag (TODO use bits, ever).
     jr z, .setup
 
-    ld a, 0
+    xor a
 
 .setup
     ld d, a
@@ -510,7 +515,7 @@ doballrightmove:
 
 ; any fix means we hit something and the movement loop should end.
 .fixposwall
-    ld a, 0
+    xor a
     ld [_BallXDir], a
 
     ld a, RIGHTBORDER
@@ -526,7 +531,7 @@ doballrightmove:
     cp 1
     jr z, .popret
 
-    ld a, 0
+    xor a
     ld [_BallXDir], a
 
     ld a, [PlayerPadMidXPos]
@@ -588,7 +593,7 @@ doballupmove:
     ; store precoll flag (TODO use bits, ever).
     jr z, .setup
 
-    ld a, 0
+    xor a
 
 .setup
     ld d, a
@@ -676,7 +681,7 @@ doballdownmove:
     ; store precoll flag (TODO use bits, ever).
     jr z, .setup
 
-    ld a, 0
+    xor a
 
 .setup
     ld d, a
@@ -714,7 +719,7 @@ doballdownmove:
 
 ; any fix means we hit something and the movement loop should end.
 .fixposwall
-    ld a, 0
+    xor a
     ld [_BallYDir], a
 
     ld a, BOTTOMBORDER
@@ -731,7 +736,7 @@ doballdownmove:
     cp 1
     jr z, .popret     ; we've already done all the movement we need.
 
-    ld a, 0
+    xor a
     ld [_BallYDir], a
 
     ld a, [PlayerPadTopYPos]
@@ -769,7 +774,7 @@ checkperformprecollx:
 
     pop af
     ; bounce left, faster.
-    ld a, 0
+    xor a
     ld [_BallXDir], a
 
     ld a, [PlayerPadMidXPos]
@@ -801,7 +806,7 @@ checkperformprecollx:
     jp .popret
 
 .noprecoll
-    ld a, 0
+    xor a
 
 .popret
     ret
@@ -822,7 +827,7 @@ checkperformprecolly:
 
     ; bounce up, faster.
     pop af
-    ld a, 0
+    xor a
     ld [_BallYDir], a
 
     ld a, [PlayerPadTopYPos]
@@ -838,7 +843,7 @@ checkperformprecolly:
     and PADF_DOWN
     jr nz, .noprecoll
 
-    ld a, 0
+    xor a
     ld [_BallYDir], a
 
     ld a, [PlayerPadBotYPos]
@@ -850,7 +855,7 @@ checkperformprecolly:
     jp .popret
 
 .noprecoll
-    ld a, 0
+    xor a
 
 .popret
     ret
@@ -867,11 +872,11 @@ speedballxup:
     add 1
 
     ld b, a
-    ld a, [_MaxBallSpeed]
+    ld a, MAXBALLSPEED
     sub b
     jr nc, .nofix
 
-    ld a, [_MaxBallSpeed]
+    ld a, MAXBALLSPEED
     ld b, a
 
 .nofix
@@ -891,7 +896,7 @@ slowballxdown:
 
     ld a, [_BallSpeedX]
     ld b, a
-    ld a, [_MinBallSpeed]
+    ld a, MINBALLSPEED
 
     cp b
     jr z, .popret
@@ -917,11 +922,11 @@ speedballyup:
     add 1
 
     ld b, a
-    ld a, [_MaxBallSpeed]
+    ld a, MAXBALLSPEED
     sub b
     jr nc, .nofix
 
-    ld a, [_MaxBallSpeed]
+    ld a, MAXBALLSPEED
     ld b, a
 
 .nofix
@@ -941,7 +946,7 @@ slowballydown:
 
     ld a, [_BallSpeedY]
     ld b, a
-    ld a, [_MinBallSpeed]
+    ld a, MINBALLSPEED
 
     cp b
     jr z, .popret
@@ -1180,5 +1185,14 @@ StartLCD:
     ret
 
 
-Sprites: {{ sprites("blank", "ball", "ppadtop", "ppadmid", "ppadbot") }}
+; this is filled in by the preprocessor.
+Sprites: {{ sprites("blank", "ball", "ppadtop", "ppadmid") }}
 SpritesEnd:
+
+
+Tiles: {{ tiles("default") }}
+TilesEnd:
+
+; this is also filled in by the processor, using the order of the sprites above.
+Palettes: {{ palettes }}
+PalettesEnd:

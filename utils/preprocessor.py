@@ -3,60 +3,97 @@ import re
 
 from PIL import Image
 
-DEFAULTFILE = "../ball.asm"
+DEFAULTFILE = "../pong.asm"
 MACROREGEX = r"([^ ]+) +{{ *(.+) *}}"
 
-def sprites(*args):
-    sprites = ""
+def tiles(*args):
+    tiles = []
     for arg in args:
-        sprites += sprite(arg) + "\n"
+        t, p = tile(arg)
+        tile.append(t)
+        palettes.append(p)
 
-    return sprites
+    # pad out to 32 colors;
+    for i in range(len(palettes), 32, 4):
+        palettes.append(
+            "\n".join([
+                "    dw 0",
+                "    dw 0",
+                "    dw 0",
+                "    dw 0",
+                "",
+            ])
+        )
+
+    return ("\n".join(tiles) + "\n", "\n".join(palettes) + "\n")
+
+def sprites(*args):
+    sprites = []
+    palettes = []
+    for arg in args:
+        s, p = sprite(arg)
+        sprites.append(s)
+        palettes.append(p)
+
+    # pad out to 32 colors;
+    for i in range(len(palettes), 32, 4):
+        palettes.append(
+            "\n".join([
+                "    dw 0",
+                "    dw 0",
+                "    dw 0",
+                "    dw 0",
+                "",
+            ])
+        )
+
+    return ("\n".join(sprites) + "\n", "\n".join(palettes) + "\n")
 
 def sprite(path):
     img = Image.open(f"sprites/{path}.png")
 
-    bytes1, bytes2 = [], []
+    if img.palette is None:
+        print("This has been modified to only work on paletted PNGs!", file=sys.stderr)
+        sys.exit(1)
 
+    palette = []
+    sprite = []
+    pal =  img.palette.palette
+    # TODO I don't quite understand what this first loop is doing.
+    for i in range(0, len(pal), 12):
+        for j in range(i, i + 12, 3):
+            try:
+                r, g, b = color = pal[j:j + 3]
+            except ValueError:
+                r, g, b = 255, 255, 255
+
+            # Convert to RGB555
+            asm_color = (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10)
+
+            palette.append(f"    dw %{asm_color:016b}")
+
+    bytes1, bytes2 = [], []
     col = 0
+    # these are paletted PNGs, so these already reference the palette and we just
+    # have to convert to binary.
     for pixels in list(img.getdata()):
+
         if col == 0:
             bytes1.append([])
             bytes2.append([])
 
-        # TODO make this fancier when I actually want color sprites.
-        if len(pixels) == 3:
-            r, g, b = pixels
-        elif len(pixels) == 4:
-            r, g, b, _ = pixels
-
-        # Only check the red channel bc lazy
-        if r == 255:
-            # White
-            bytes1[-1].append("0")
-            bytes2[-1].append("0")
-        elif r == 0:
-            # Black
-            bytes1[-1].append("1")
-            bytes2[-1].append("1")
-        elif r < 128:
-            # Dark
-            bytes1[-1].append("0")
-            bytes2[-1].append("1")
-        else:
-            # Light
-            bytes1[-1].append("1")
-            bytes2[-1].append("0")
+        binstring = format(pixels % 4, "02b")
+        bytes1[-1].append(binstring[1])
+        bytes2[-1].append(binstring[0])
 
         col += 1
         if col > 7:
             col = 0
 
-    output = ""
     for byte1, byte2 in zip(bytes1, bytes2):
-        output += "DB %" + "".join(byte1) + ",%" + "".join(byte2) + "\n"
+        sprite.append("DB %" + "".join(byte1) + ",%" + "".join(byte2))
 
-    return output
+    return "\n".join(sprite) + "\n", "\n".join(palette) + "\n"
 
 # Just echos back what you put in, for testing
 def echo(thing):
@@ -64,6 +101,11 @@ def echo(thing):
 
 def process(inname, outname=None):
     output_lines = []
+
+    # store palettes after sprites generated.
+    # kinda gross, but imo less gross than doing two passes where we put a macro expression in
+    # both times, or something.
+    palettes = ""
     with open(inname, "r") as f:
         for line in f.readlines():
             new_line = None
@@ -72,11 +114,16 @@ def process(inname, outname=None):
                 label = match.group(1)
                 expression = match.group(2)
 
-                # Eval whatever they put in the macro
-                result = eval(expression)
+                # well, this is gross.
+                if label == "Sprites:":
+                    # Eval whatever they put in the macro
+                    sprites, palettes = eval(expression)
 
-                # Rebuild the line with the new result
-                line = label + "\n" + result
+                    # Rebuild the line with the new result
+                    line = f"{label}\n{sprites}"
+
+                else:
+                    line = f"{label}\n{palettes}"
 
             output_lines.extend(new_line or [line])
 
