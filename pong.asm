@@ -10,6 +10,9 @@ RIGHTBORDER EQU 160
 TOPBORDER EQU 8+8
 BOTTOMBORDER EQU 144+8
 
+; player can't go across the board.
+P1MAXX EQU 80
+
 PADSPEED EQU 2
 MINBALLSPEED EQU 1
 MAXBALLSPEED EQU 7
@@ -42,14 +45,6 @@ _BallYDir      RB 1               ; 1 is down
 _BallXDir      RB 1               ; 1 is right
 _P1PadSpeed    RB 1
 
-
-; stolen macro to help write colors.
-dcolor: MACRO  ; $rrggbb -> gbc representation
-_r = ((\1) & $ff0000) >> 16 >> 3
-_g = ((\1) & $00ff00) >> 8  >> 3
-_b = ((\1) & $0000ff) >> 0  >> 3
-    dw (_r << 0) | (_g << 5) | (_b << 10)
-    ENDM
 
 SECTION "Vblank", ROM0[$0040]
     jp _DMACODE
@@ -89,27 +84,56 @@ main:
 
 
 initscreen:
-    ; greyscale palette
-    ld a, %01100100
-    ld [rBGP], a
+    call StopLCD                  ; Need to stop LCD before loading vram
 
+    ; set auto-increment flag for tile palettes,
+    ; so the set to rOCPD in a few lines will fill in all palettes.
+    ld a, %10000000
+    ld [rBCPS], a
+
+    ld hl, TilePalettes
+
+    ; TODO see if you can set up a memory load or something instead.
+    REPT 32
+    ld a, [hl+]
+    ldh [rBCPD], a
+    ENDR
+
+    ; sprite has same process
     ld a, %10000000
     ld [rOCPS], a
 
     ; load multiple palettes
-    ld hl, Palettes
+    ld hl, SpritePalettes
 
+    ; TODO see if you can set up a memory load or something instead.
     REPT 32
     ld a, [hl+]
     ldh [rOCPD], a
     ENDR
 
-    call StopLCD                  ; Need to stop LCD before loading vram
-
     ld hl, Sprites                ; Load the tile data into Vram
     ld de, _VRAM
-    ld bc, 16*(SpritesEnd-Sprites)
+    ld bc, 16*(TilesEnd-Sprites)
     call mem_Copy
+
+    ; load map data into memory
+    ld hl, Map
+    ld de, _SCRN0
+    ld bc, 40*(MapEnd-Map)
+    call mem_Copy
+
+    ld a, %00000001
+    ld [rVBK], a
+
+    ; and palettes for map squares
+    ld hl, MapData
+    ld de, _SCRN0
+    ld bc, 40*(MapDataEnd-MapData)
+    call mem_Copy
+
+    ld a, %00000000
+    ld [rVBK], a
 
     xor a                         ; Clear sprite table
     ld hl, _OAMDATA
@@ -1023,7 +1047,20 @@ p1moveright:
     ld a, RIGHTBORDER
 
     sub a, b
-    jr nc, .nofix
+    jr c, .fixwall
+
+    ld a, P1MAXX
+    sub a, b
+    jr c, .fixinviswall
+
+    jp .nofix
+
+.fixinviswall
+    ld a, P1MAXX
+    ld b, a
+    jp .loopdone
+
+.fixwall
     ld a, RIGHTBORDER
     ld b, a
     jp .loopdone
@@ -1185,14 +1222,36 @@ StartLCD:
     ret
 
 
-; this is filled in by the preprocessor.
-Sprites: {{ sprites("blank", "ball", "ppadtop", "ppadmid") }}
+; preprocessor will fill in sprites and tiles according to lists inside brackets.
+Sprites: {{ sprites("blank", "ball", "ppadtop", "ppadmid", root="sprites") }}
 SpritesEnd:
 
 
-Tiles: {{ tiles("default") }}
+Tiles: {{ sprites("default", "goal_end", "goal_mid", "midline", root="tiles", is_bg=True) }}
 TilesEnd:
 
-; this is also filled in by the processor, using the order of the sprites above.
-Palettes: {{ palettes }}
-PalettesEnd:
+
+; sprites and tiles are paletted PNGs,
+; so the preprocessor will extract those palettes and fill out these sections as well.
+SpritePalettes: {{ }}
+SpritePalettesEnd:
+
+
+TilePalettes: {{ }}
+TilePalettesEnd:
+
+
+ObjectConstants: {{ }}
+
+
+Map: {{
+    define_map(
+       tileset=["default", "goal_end", "goal_mid", "midline",],
+       mapfile="default_map",
+   )
+}}
+MapEnd:
+
+
+MapData: {{ }}
+MapDataEnd
