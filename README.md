@@ -17,6 +17,6 @@ perhaps using the .lvimrc file in the repo.
 if so,
 install [vim-localvimrc][https://github.com/embear/vim-localvimrc] with your plugin manager of choice.
 
-
-
+Helped out a lot by https://github.com/eevee/anise-cheezball-rising and by 
+https://github.com/hylyh/gameboy-helicopter starting out.
 
