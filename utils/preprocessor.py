@@ -66,7 +66,7 @@ def extract_palette_colors(img):
     return asm_colors
 
 def sprite(*, path, root, is_bg):
-    img = Image.open(f"{root}/{path}.png")
+    img = Image.open(f"data/{root}/{path}.png")
 
     if img.palette is None:
         print("This has been modified to only work on paletted PNGs!", file=sys.stderr)
@@ -114,7 +114,7 @@ def define_map(*, tileset, mapfile):
     read pixels, and replace with constants for each tile.
     also define map palettes.
     """
-    img = Image.open(f"maps/{mapfile}.png")
+    img = Image.open(f"data/maps/{mapfile}.png")
 
     # GB background dimensions.
     tile_width = 32
@@ -151,11 +151,16 @@ def define_map(*, tileset, mapfile):
             label = f"{SEEN_TILES_MAP[tileset[pixel]]}"
 
             palette = f"{BG_TILE_MAP[tileset[pixel]]:03b}"
-            print(palette)
 
         map_row_bytes.append(label)
 
-        palette_row_bytes.append(f"`00000{palette}")
+        # flip across midline
+        if col >= 10:
+            flip_bit = 1
+        else:
+            flip_bit = 0
+
+        palette_row_bytes.append(f"`00{flip_bit}00{palette}")
 
         col += 1
 
