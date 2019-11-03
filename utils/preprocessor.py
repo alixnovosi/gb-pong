@@ -108,6 +108,66 @@ def sprite(*, path, root, is_bg):
 
     return "\n".join(sprite) + "\n", "\n".join(palette) + "\n"
 
+def define_font(*, fontfile):
+    """
+    define a font in bytes with db.
+
+    font given as a single PNG with sentinel pixels to indicate char breaks.
+    """
+    img = Image.open(f"data/{fontfile}")
+    fontimg =  img.palette.palette
+
+    height = img.height
+    width = img.width
+
+    # read sentinel values to get starts/ends of chars.
+    # sentinel values are assumed to be in the first row,
+    # with one blank row,
+    # and then letter data.
+    bounds = []
+    data = img.getdata()
+    last_filled_index = None
+    current_pair = []
+    for i in range(img.width):
+        pixel = data[i]
+
+        if pixel == 1:
+            if len(current_pair) > 0:
+                current_pair.append(i-2)
+                bounds.append(current_pair)
+                current_pair = [i]
+            else:
+                current_pair.append(i)
+
+            # take two adjacent sentinel pixels as a sign to stop
+            if last_filled_index is not None and last_filled_index - i == 1:
+                break
+
+            last_filled_index = i
+
+    # grab letter data and generate db blocks to be "\n".join'd
+    letters = []
+    for i, [start, end] in enumerate(bounds):
+        letter = [
+            f"; alphabet item {i}",
+            f"    db {end-start+1}",
+        ]
+
+        # we're just indexing into the 1D data array and pulling out letters here
+        for r in range(2, height):
+            row = []
+            for c in range(start, end+1):
+                row.append(str(data[r * width + c]))
+
+            row.extend(["0"] * (8-len(row)))
+
+            letter.append("    dw `" + "".join(row))
+
+        letters.append("\n".join(letter) + "\n")
+
+    return "\n".join(letters)
+
+
 def define_map(*, tileset, mapfile):
     """
     define a map in bytes with db.
@@ -267,6 +327,10 @@ def process(inname, outname=None):
 
                 elif label == "MapData:":
                     new_line = f"{label}\n{map_tile_palettes}"
+
+                elif label == "Font:":
+                    font = eval(expression)
+                    new_line = f"{label}\n{font}"
 
                 output_lines.append(new_line)
 

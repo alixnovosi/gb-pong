@@ -3,6 +3,13 @@ INCLUDE "includes/memory.asm"
 
 INCLUDE "constants.asm"
 
+dcolor: MACRO  ; COLOR($rrggbb) -> gbc representation
+_r = ((\1) & $ff0000) >> 16 >> 3
+_g = ((\1) & $00ff00) >> 8  >> 3
+_b = ((\1) & $0000ff) >> 0  >> 3
+    dw (_r << 0) | (_g << 5) | (_b << 10)
+ENDM
+
                      RSSET _OAM_DATA    ; Base location is _OAM_DATA
 BallYPos             RB 1               ; Set each to an incrementing location
 BallXPos             RB 1
@@ -30,7 +37,6 @@ _BallSpeedX    RB 1
 _BallYDir      RB 1               ; 1 is down
 _BallXDir      RB 1               ; 1 is right
 _P1PadSpeed    RB 1
-_vblank_flag   RB 1
 
                RSSET  _TEXT_BUFFER
 _text_buffer   RB 40
@@ -139,9 +145,9 @@ initscreen:
 
 
 initsprite:
-    ld a, 30                      ; initialize ball sprite
+    ld a, 84                      ; initialize ball sprite
     ld [BallYPos], a
-    ld a, 16
+    ld a, 84
     ld [BallXPos], a
     ld a, 1
     ld [BallTileNum], a
@@ -193,10 +199,49 @@ initscore:
     push af
     push bc
 
+    ; set up palette
+    call wait_for_vblank
+    ld a, %10111000
+    ld [rBCPS], a
+    ld hl, PaletteText
+    REPT 8
+    ld a, [hl+]
+    ld [rBCPD], a
+    ENDR
+
+    ; blank out tile 255
+    ld a, 1
+    ldh [rVBK], a
+    xor a
+    ld c, BYTES_PER_TILE
+    ld hl, $8800 + ($ff - $80) * BYTES_PER_TILE
+    call fill
+
+    ; row 2
+    call wait_for_vblank
+    ; TODO do I need to mess with rLYC for what I
+    ; want to do here?
+    ld hl, _SCRN0
+    ld de, $8800
+    ld b, 0 + 1
+    call fill_tilemap_row
+
+    ; row 1
+    call wait_for_vblank
+    ld hl, _SCRN0 + CANVAS_WIDTH_TILES
+    ld de, $8800 
+    ld b, TEXT_START_TILE_1 + 1
+    call fill_tilemap_row
+
+    ; zero out tile buffer
+    xor a
+    ld hl, _text_buffer
+    ld c, $40
+    call fill
+
     ; draw text actually needs this stuff.
     ld a, 4
     ld [_text_y], a
-    ld a, 4
     ld [_text_x], a
 
     ld de, p1_label
@@ -491,7 +536,7 @@ draw_text:
     ld c, $20
     ld de, _text_buffer
 
-.draw_left
+.draw_left:
     ld a, [de]
     inc de
     inc de
@@ -502,7 +547,8 @@ draw_text:
     ; draw the right two tiles
     ld c, $20
     ld de, _text_buffer + 1
-.draw_right
+
+.draw_right:
     ld a, [de]
     inc de
     inc de
@@ -556,6 +602,11 @@ draw_text:
     jp .next_letter
 
 .popret:
+    call wait_for_vblank
+
+    xor a
+    ldh [rVBK], a
+
     pop af
     ret
 
@@ -1413,17 +1464,69 @@ StartLCD:
 SECTION "Utility code", ROM0
 ; idle until next vblank
 wait_for_vblank:
-    xor a                       ; clear the vblank flag
-    di                          ; avoid irq race after this ld
-    ld [_vblank_flag], a
 .vblank_loop:
     ei
     halt                        ; wait for interrupt
     di
-    ld a, [_vblank_flag]         ; was it a vblank interrupt?
-    and a
-    jr z, .vblank_loop          ; if not, keep waiting
+    ld a, [rLY]                 ; get LCDC y coord
+    cp 145                      ; is it on line 145
+    jr nz, .vblank_loop         ; if not keep waiting
     ei
+
+    ret
+
+
+; fill c bytes starting at hl with a
+; NOTE: c must not be zero
+fill:
+    ld [hl+], a
+    dec c
+    jr nz, fill
+    ret
+
+
+; fill a row in tilemap in a way that's helpful
+; to scores.
+; hl: where to start filling
+; de: pointer to corresponding tile to start erasing
+; b: tile to start with
+fill_tilemap_row:
+    ; Populate bank 0, the tile proper
+    xor a
+    ldh [rVBK], a
+
+    ld c, SCREEN_WIDTH_TILES
+    ld a, b
+.loop0:
+    ld [hl+], a
+    add a, 2
+    dec c
+    jr nz, .loop0
+
+    ; Populate bank 1, the bank and palette
+    ld a, 1
+    ldh [rVBK], a
+    ld a, %00001111  ; bank 1, palette 7
+    ld c, SCREEN_WIDTH_TILES
+    dec hl
+.loop1:
+    ld [hl-], a
+    dec c
+    jr nz, .loop1
+
+    ; Blank out the corresponding tiles
+    ld h, d
+    ld l, e
+    ld de, 16
+    ld c, SCREEN_WIDTH_TILES
+    xor a
+.tile_erase_loop:
+    REPT 16
+    ld [hl+], a
+    ENDR
+    add hl, de
+    dec c
+    jr nz, .tile_erase_loop
 
     ret
 
@@ -1461,3 +1564,15 @@ MapEnd:
 
 MapData: {{ }}
 MapDataEnd
+
+; TODO consider other palettes, don't just steal this one.
+PaletteText:
+    dcolor $000000
+    dcolor $ffffff
+    dcolor $999999
+    dcolor $333333
+
+Font: {{
+    define_font(fontfile="font.png")
+}}
+FontEnd:
