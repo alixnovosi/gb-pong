@@ -33,7 +33,15 @@ _P1PadSpeed    RB 1
 _vblank_flag   RB 1
 
                RSSET  _TEXT_BUFFER
-_text_buffer   RB 4
+_text_buffer   RB 40
+_text_x        RB 1
+_text_y        RB 1
+
+SECTION "Text constants", ROMX
+p1_label:
+    db "P1", 0
+p2_label:
+    db "P2", 0
 
 
 SECTION "Vblank",        ROM0[$0040]
@@ -179,6 +187,27 @@ initsprite:
     ld [_P1PadSpeed], a
 
 
+initscore:
+    ; do a mixed buffer save here.
+    ; usually I like to do in callee but whatever
+    push af
+    push bc
+
+    ; draw text actually needs this stuff.
+    ld a, 4
+    ld [_text_y], a
+    ld a, 4
+    ld [_text_x], a
+
+    ld de, p1_label
+    ld hl, $8800
+
+    call draw_text
+
+    pop bc
+    pop af
+
+
 loop:
     halt
     nop                           ; always need nop after halt
@@ -304,14 +333,14 @@ ball_oob_x:
     sub b
     jr c, .col
 
-.nocol
+.nocol:
     xor a
     jp .popret
 
-.col
+.col:
     ld a, 1
 
-.popret
+.popret:
     pop bc
     ret
 
@@ -342,25 +371,203 @@ ball_oob_y:
     ret
 
 
-move_ball:
+; this is cobbled together from eevee's anise-cheezball-rising
+; code.
+; "cobbled together" because I want small text at several defined
+; locations instead of long text at one defined location.
+; hoping to not accidentally blow away my sprites this time.
+; as a consequence I don't fully understand this code,
+; and it is a mix of verbatim copied and mostly copied with
+; edited comments and commentary.
+;
+; put text on screen
+; de: text cursor + current character tiles
+; hl: current VRAM tile being drawn into
+draw_text:
     push af
-    push bc
-    push hl
 
-    call ball_x_move
-    call ball_y_move
+    ; The basic problem here is to shift a byte and split it
+    ; across two other bytes, like so:
+    ;      yyyyy YYY
+    ;   xxx00000 00000000
+    ;           ↓
+    ;   xxxyyyyy YYY00000
+    ; To do this, we rotate the byte, mask the low bits, OR them
+    ; with the first byte, restore it, mask the high bits, and
+    ; then store that directly as the second byte (which should
+    ; be all zeroes anyway).
+.next_letter:
+    ld a, [de]                  ; get current character
+    and a                       ; if NUL, we're done!
+    jp z, .popret
+    inc de                      ; otherwise, increment
+
+    ; could handle special chars here if we wanted.
+
+    ; get the font character
+    push de                     ; from here, de is tiles
+    ; need to compute font char address in hl because we can only
+    ; do our math there.
+    push hl
+    sub 32
+    ld hl, Font
+    and a
+    jr z, .skip_letter_stride
+    ld de, 33                   ; 1 width byte + 16 * 2 tiles
+
+.letter_stride:
+    add hl, de
+    dec a
+    jr nz, .letter_stride
+
+.skip_letter_stride:
+    ld d, h                     ; move char tile addr to de
+    ld e, l
+
+    ld a, [de]                  ; read width
+    inc de
+
+    ; copy into current tiles
+    push af                     ; stash width
+    ld c, 32                    ; 32 bytes per row
+    ld hl, _text_buffer
+
+    ; some comment-out stuff I skipped
+    inc b
+
+.row_copy:
+    ld a, [de]                  ; read next row of char
+    ; rotate right by b - 1 pixels
+    push bc                     ; save bc while shifting
+    ld c, $ff                   ; create a mask
+    dec b
+    jr z, .skip_rotate
+
+.rotate:
+    rrca                        ; don't quite remember this,
+                                ; but we're pushing stuff off the end
+                                ; in a way we can recover bits.
+    srl c
+    dec b
+    jr nz, .rotate
+
+.skip_rotate:
+    push af
+    and a, c                    ; mask right pixels
+
+    ; draw to left half of text buffer
+    or a, [hl]                  ; OR with current tile
+    ld [hl+], a
+
+    ; write remaining bits to right half
+    ld a, c                     ; put mask in a...
+    cpl                         ; ...invert it
+    ld c, a                     ; ...then put it back
+    pop af                      ; restore unmasked pixels from above
+    and a, c                    ; mask left pixels with inverted mask
+    ld [hl+], a                 ; store them too
+
+    ; loop and cleanup
+    inc de                      ; next row of char
+    pop bc                      ; restore counter!
+    dec c
+    jr nz, .row_copy
+
+    pop af                      ; restore width again
+
+    ; Draw the buffered tiles to vram
+    ; The text buffer is treated like it's 16 pixels wide, but
+    ; VRAM is of course only 8 pixels wide, so we need to do
+    ; this in two iterations: the left two tiles, then the right
+    ; if eevee does get a diagram I should probably take that too.
+    ; text is hard, man.
+    pop hl                       ; restore hl (VRAM)
+    push af                      ; stash width, again
+    call wait_for_vblank         ; wait before drawing
+    push bc
+    push de
+
+    ; draw left two tiles
+    ld c, $20
+    ld de, _text_buffer
+
+.draw_left
+    ld a, [de]
+    inc de
+    inc de
+    ld [hl+], a
+    dec c
+    jr nz, .draw_left
+
+    ; draw the right two tiles
+    ld c, $20
+    ld de, _text_buffer + 1
+.draw_right
+    ld a, [de]
+    inc de
+    inc de
+    ld [hl+], a
+    dec c
+    jr nz, .draw_right
+
+    pop de
+    pop bc
+    pop af                       ; restore width, again
+
+    ; increment pixel offset and deal with overflow
+    ; there's a lot of TODO I'm ignoring here.
+    dec b
+    add b                        ; a <- new x offset
+    ld bc, -32                   ; move VRAM pointer back...
+    add hl, bc                   ; to the start of the tile
+    cp a, 8
+    jr nc, .wrap_to_next_tile
+
+    ; the new offset is less than 8, so this character didn't
+    ; draw into the next tile. move the VRAM pointer back
+    ; another two tiles, to the column we started in
+    add hl, bc
+    jr .done_wrap
+
+.wrap_to_next_tile:
+    ; the new offset is 8 or more, so this character drew into
+    ; the next tile. subtract 8, but also shift the text buffer
+    ; by copying all the "right" tiles over the "left" tiles
+    sub 8                         ; a >= 8: subtract tile width
+    push hl
+    push af
+    ld hl, _text_buffer + $40 - 1
+    ld c, $20
+
+.shift_buffer:
+    ld a, [hl-]
+    ld [hl-], a
+    dec c
+    jr nz, .shift_buffer
+
+    pop af
+    pop hl
+
+.done_wrap:
+    ld b, a                       ; either way, store into b
+
+    ; loop
+    pop de                        ; pop text pointer
+    jp .next_letter
 
 .popret:
-    pop hl
-    pop bc
     pop af
+    ret
+
+
+move_ball:
+    call ball_x_move
+    call ball_y_move
     ret
 
 
 ball_x_move:
     push af
-    push bc
-    push hl
 
     ; update position from speed + direction
     ; abort if vx is zero.
@@ -380,8 +587,6 @@ ball_x_move:
     call ball_right_move
 
 .popret:
-    pop hl
-    pop bc
     pop af
     ret
 
@@ -565,8 +770,6 @@ ball_right_move:
 
 ball_y_move:
     push af
-    push bc
-    push hl
 
     ld a, [_BallSpeedY]
     cp 0
@@ -584,8 +787,6 @@ ball_y_move:
     call ball_down_move
 
 .popret:
-    pop hl
-    pop bc
     pop af
     ret
 
@@ -816,10 +1017,10 @@ perform_precoll_x:
 
     jp .popret
 
-.noprecoll
+.noprecoll:
     xor a
 
-.popret
+.popret:
     ret
 
 
@@ -923,7 +1124,7 @@ slow_ball_x_down:
 
 
 ; speed ball up, but stay under max speed.
-speedballyup:
+speed_ball_y_up:
     push af
     push bc
 
