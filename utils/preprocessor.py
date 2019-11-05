@@ -1,83 +1,115 @@
-import sys
+import collections
 import re
-
-# TODO clean up this enormous mess.
+import sys
 
 from PIL import Image
 
+# TODO clean up this enormous mess.
+
+# CONSTANTS
 DEFAULTFILE = "../pong.asm"
 
-SINGLE_LINE_MACRO_REGEX = r"([^ ]+) +{{ *(.+) *}}$"
+SINGLE_LINE_MACRO_REGEX = r"^([A-Za-z0-9:]+) +{{ *([^}}\n]*[^}}\n ]*) *}}$"
 
-MULTI_LINE_START_MACRO_REGEX = r"^([^ ]+) +{{ *(.+)? *$"
-MULTI_LINE_MID_MACRO_REGEX = r"^ *([^}]+) *$"
-MULTI_LINE_END_MACRO_REGEX = r"^ *([^}]+)? *}}$"
+MULTI_LINE_START_MACRO_REGEX = r"^([A-Za-z0-9:]+) +{{ *([^}}\n]*[^}}\n ]*) *"
+MULTI_LINE_MID_MACRO_REGEX = r"^\s*([^{}\s#]*[\(\\)\[\],]+)( *.*)?$"
+MULTI_LINE_END_MACRO_REGEX = r"^ *}} *$"
 
-SEEN_TILES = []
-SEEN_BG_TILES = []
+BG_TYPE = "BG"
+SPRITE_TYPE = "SPRITE"
 
-# for looking up palette indices.
-SEEN_TILES_MAP = {}
-BG_TILE_MAP = {}
+# data used for constructing palettes and tiles.
+OUTPUT_TILES = ""
 
-# reuse the same function for tiles (which can have four colors),
-# because why not.
-# the code isn't different.
-def sprites(*args, root="sprites", is_bg=False):
-    sprites = []
-    palettes = []
-    for arg in args:
-        s, p = sprite(path=arg, root=root, is_bg=is_bg)
-        sprites.append(s)
-        palettes.append(p)
+# "TileName" -> {"tile_index": 1, "palette_index": 2}
+NAME_TO_TILE_DATA = collections.OrderedDict()
 
-    return ("\n".join(sprites) + "\n", finish_palettes(palettes))
+# these store actual palette dw chunks.
+OUTPUT_SPRITE_PALETTES = ""
+OUTPUT_BG_PALETTES = ""
 
-def finish_palettes(palettes):
-    # pad out to 32 colors;
-    for i in range(len(palettes), 32, 4):
-        palettes.append(
-            "\n".join([
-                "    dw 0",
-                "    dw 0",
-                "    dw 0",
-                "    dw 0",
-                "",
-            ]))
+# map bytes (indicating what tiles) and data bytes (indicating palettes)
+OUTPUT_MAP = []
+OUTPUT_MAP_DATA = []
 
-    return "\n".join(palettes) + "\n"
+# named tuples used in calls to function.
 
-def extract_palette_colors(img):
-    """extract palette colors from a paletted png."""
-    pal =  img.palette.palette
+# Tile - represents a tile, which is either a background square or a sprite.
+#     (or part of the window, but I'm not using that yet).
+# name - filename
+# palette - whether to create new palette ('*'),
+#     or to reuse another palette (referred to with filename).
+# type - sprite or BG, determines where palette goes. also determines dir.
+# palette_only - for sprites where the image is thrown away,
+#     but the palette should be saved.
+Tile = collections.namedtuple(
+    "Tile",
+    ("name", "palette", "type", "palette_only"),
+    defaults=(None, None, None, None),
+)
 
-    asm_colors = []
-    # TODO I don't quite understand what this first loop is doing.
-    for i in range(0, len(pal), 12):
-        for j in range(i, i + 12, 3):
-            try:
-                r, g, b = color = pal[j:j + 3]
-            except ValueError:
-                r, g, b = 255, 255, 255
+# MapTile - just a container for the two things we need for the map,
+#     a reference to a tile, and the palette to use for that tile.
+#     The map function call will combine this with a map file specifying where squares go,
+#     and then magic turns that into the two BG maps the gameboy needs.
+# tile - reference to Tile we should use (will fetch bin data for it).
+# palette - reference to palette we should use.
+MapTile = collections.namedtuple(
+    "MapTile",
+    ("tile", "palette"),
+    defaults=(None, None),
+)
 
-            # Convert to RGB555
-            asm_colors.append((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10))
+def define_tiles(*, tiles):
+    """define several tiles."""
+    output_tiles_list = []
+    output_sprite_palettes_list = []
+    output_bg_palettes_list = []
 
-    return asm_colors
+    for tile in tiles:
+        sprite, palette = extract_tile(tile)
 
-def sprite(*, path, root, is_bg):
+        dict_entry = {}
+
+        # handle tiles which are palette only.
+        if not tile.palette_only:
+            output_tiles_list.append(sprite)
+            dict_entry["tile_index"] = len(output_tiles_list)-1
+
+        if tile.palette != "*":
+            dict_entry["palette_index"] = NAME_TO_TILE_DATA[tile.palette]["palette_index"]
+
+        # new palette means a bunch of bookkeeping.
+        else:
+            if tile.type == BG_TYPE:
+                output_bg_palettes_list.append(palette)
+                dict_entry["palette_index"] = len(output_bg_palettes_list)-1
+
+            else:
+                output_sprite_palettes_list.append(palette)
+                dict_entry["palette_index"] = len(output_sprite_palettes_list)-1
+
+        NAME_TO_TILE_DATA[tile.name] = dict_entry
+
+    return (
+        "\n\n".join(output_tiles_list) + "\n",
+        finish_palettes(output_bg_palettes_list),
+        finish_palettes(output_sprite_palettes_list),
+    )
+
+def extract_tile(tile_tuple):
+    """pull out bin image and palette for a tile"""
+    path = tile_tuple.name
+
+    if tile_tuple.type == BG_TYPE:
+        root = "tiles"
+    else:
+        root = "sprites"
+
     img = Image.open(f"data/{root}/{path}.png")
-
     if img.palette is None:
         print("This has been modified to only work on paletted PNGs!", file=sys.stderr)
         sys.exit(1)
-
-    SEEN_TILES.append(path.upper())
-    SEEN_TILES_MAP[path] = len(SEEN_TILES)-1
-
-    if is_bg:
-        SEEN_BG_TILES.append(path.upper())
-        BG_TILE_MAP[path] = len(SEEN_BG_TILES)-1
 
     palette = []
     asm_colors = extract_palette_colors(img)
@@ -104,9 +136,46 @@ def sprite(*, path, root, is_bg):
             col = 0
 
     for byte1, byte2 in zip(bytes1, bytes2):
-        sprite.append("DB %" + "".join(byte1) + ",%" + "".join(byte2))
+        sprite.append("    db %" + "".join(byte1) + ",%" + "".join(byte2))
 
-    return "\n".join(sprite) + "\n", "\n".join(palette) + "\n"
+    return "\n".join(sprite), "\n".join(palette)
+
+def finish_palettes(palettes):
+    # pad out to 8 palettes
+    for i in range(8-len(palettes)):
+        palettes.append(
+            "\n".join([
+                "    dw 0",
+                "    dw 0",
+                "    dw 0",
+                "    dw 0",
+            ]))
+
+    print(f"finish func has produced {palettes}")
+
+    res = "\n\n".join(palettes) + "\n"
+
+    print(f"and for some reason we produce {res}")
+
+    return res
+
+def extract_palette_colors(img):
+    """extract palette colors from a paletted png."""
+    pal =  img.palette.palette
+
+    asm_colors = []
+    # TODO I don't quite understand what this first loop is doing.
+    for i in range(0, len(pal), 12):
+        for j in range(i, i + 12, 3):
+            try:
+                r, g, b = color = pal[j:j + 3]
+            except ValueError:
+                r, g, b = 255, 255, 255
+
+            # Convert to RGB555
+            asm_colors.append((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10))
+
+    return asm_colors
 
 def define_font(*, fontfile):
     """
@@ -176,6 +245,9 @@ def define_map(*, tileset, mapfile):
     """
     img = Image.open(f"data/maps/{mapfile}.png")
 
+    global OUTPUT_MAP
+    global OUTPUT_MAP_DATA
+
     # GB background dimensions.
     tile_width = 32
 
@@ -208,9 +280,11 @@ def define_map(*, tileset, mapfile):
             palette = 0
 
         else:
-            label = f"{SEEN_TILES_MAP[tileset[pixel]]}"
+            tileset_item = tileset[pixel]
 
-            palette = f"{BG_TILE_MAP[tileset[pixel]]:03b}"
+            label = f"{NAME_TO_TILE_DATA[tileset_item.tile]['tile_index']}"
+
+            palette = f"{NAME_TO_TILE_DATA[tileset_item.palette]['palette_index']:03b}"
 
         map_row_bytes.append(label)
 
@@ -232,13 +306,17 @@ def define_map(*, tileset, mapfile):
     map_rows.append("    db " + ", ".join(map_row_bytes))
     palette_rows.append("    db " + ", ".join(palette_row_bytes))
 
-    return ("\n".join(map_rows) + "\n", "\n".join(palette_rows) + "\n")
+    OUTPUT_MAP = "\n".join(map_rows) + "\n"
+    OUTPUT_MAP_DATA = "\n".join(palette_rows) + "\n"
 
 # Just echos back what you put in, for testing
 def echo(thing):
     return thing
 
 def process(inname, outname=None):
+    global OUTPUT_SPRITE_PALETTES
+    global OUTPUT_BG_PALETTES
+
     output_lines = []
 
     # store palettes after sprites generated.
@@ -290,48 +368,49 @@ def process(inname, outname=None):
                     # when match fails, do end match.
                     match = re.match(MULTI_LINE_END_MACRO_REGEX, line)
                     if match:
-                        expression += match.group(1) if match.group(1) else ""
                         line_i += 1
                         line = lines[line_i]
 
                         expression = expression.replace("\n", "")
 
-            if label and expression:
+            if label:
                 # well, this is gross.
-                if label == "Sprites:":
-                    # Eval whatever they put in the macro
-                    bin_sprites, sprite_palettes = eval(expression)
+                if label == "Tiles:":
+                    OUTPUT_TILES, OUTPUT_BG_PALETTES, OUTPUT_SPRITE_PALETTES = eval(expression)
+                    new_line = f"{label}\n{OUTPUT_TILES}"
 
-                    # Rebuild the line with the new result
-                    new_line = f"{label}\n{bin_sprites}"
-
-                elif label == "Tiles:":
-                    bin_tiles, tile_palettes = eval(expression)
-                    new_line = f"{label}\n{bin_tiles}"
+                    # debug info
 
                 elif label == "SpritePalettes:":
-                    new_line = f"{label}\n{sprite_palettes}"
+                    new_line = f"{label}\n{OUTPUT_SPRITE_PALETTES}"
 
-                elif label == "TilePalettes:":
-                    new_line = f"{label}\n{tile_palettes}"
+                elif label == "BGPalettes:":
+                    new_line = f"{label}\n{OUTPUT_BG_PALETTES}"
 
                 elif label == "ObjectConstants:":
                     new_line = "; tile constants for map reference\n"
                     new_line += "\n".join(
-                        [f"{tile} EQU {i}" for i, tile in enumerate(SEEN_TILES)]
+                        [
+                            f"{key.upper()} EQU {val['tile_index']}"
+                            for key, val
+                            in NAME_TO_TILE_DATA.items()
+                            if "tile_index" in val
+                        ]
                     )
 
                 elif label == "Map:":
-                    bin_map, map_tile_palettes = eval(expression)
-                    new_line = f"{label}\n{bin_map}"
+                    eval(expression)
+                    new_line = f"{label}\n{OUTPUT_MAP}"
 
                 elif label == "MapData:":
-                    new_line = f"{label}\n{map_tile_palettes}"
+                    new_line = f"{label}\n{OUTPUT_MAP_DATA}"
 
                 elif label == "Font:":
                     font = eval(expression)
                     new_line = f"{label}\n{font}"
 
+                if new_line is None:
+                    print(f"we produced a none for {label}")
                 output_lines.append(new_line)
 
             else:

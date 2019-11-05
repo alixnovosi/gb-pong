@@ -92,7 +92,7 @@ initscreen:
     ld a, %10000000
     ld [rBCPS], a
 
-    ld hl, TilePalettes
+    ld hl, BGPalettes
 
     ; TODO see if you can set up a memory load or something instead.
     REPT 32
@@ -113,27 +113,27 @@ initscreen:
     ldh [rOCPD], a
     ENDR
 
-    ld hl, Sprites                ; Load the tile data into Vram
-    ld de, _VRAM
-    ld bc, 16*(TilesEnd-Sprites)
+    ld hl, Tiles                ; Load the tile data into Vram
+    ld de, $8000
+    ld bc, 16*(TilesEnd-Tiles)
     call mem_Copy
 
     ; load map data into memory
     ld hl, Map
-    ld de, _SCRN0 + CANVAS_WIDTH_TILES*2
+    ld de, _SCRN0
     ld bc, 40*(MapEnd-Map)
     call mem_Copy
 
-    ld a, %00000001
+    ld a, 1
     ld [rVBK], a
 
     ; and palettes for map squares
     ld hl, MapData
-    ld de, _SCRN0 + CANVAS_WIDTH_TILES*2
+    ld de, _SCRN0
     ld bc, 40*(MapDataEnd-MapData)
     call mem_Copy
 
-    ld a, %00000000
+    xor a
     ld [rVBK], a
 
     xor a                         ; Clear sprite table
@@ -194,44 +194,15 @@ initsprite:
 
 
 initscore:
-    ; do a mixed buffer save here.
-    ; usually I like to do in callee but whatever
-    push af
-    push bc
-
     ; set up palette
-    call wait_for_vblank
-    ld a, %10111000
-    ld [rBCPS], a
-    ld hl, PaletteText
-    REPT 8
-    ld a, [hl+]
-    ld [rBCPD], a
-    ENDR
-
-    ; blank out tile 255
-    ld a, 1
-    ldh [rVBK], a
-    xor a
-    ld c, BYTES_PER_TILE
-    ld hl, $8800 + ($ff - $80) * BYTES_PER_TILE
-    call fill
-
-    ; row 2
-    call wait_for_vblank
-    ; TODO do I need to mess with rLYC for what I
-    ; want to do here?
-    ld hl, _SCRN0
-    ld de, $8800
-    ld b, 0 + 1
-    call fill_tilemap_row
-
-    ; row 1
-    call wait_for_vblank
-    ld hl, _SCRN0 + CANVAS_WIDTH_TILES
-    ld de, $8800 
-    ld b, TEXT_START_TILE_1 + 1
-    call fill_tilemap_row
+    ;call wait_for_vblank
+    ;ld a, %10111000
+    ;ld [rBCPS], a
+    ;ld hl, PaletteText
+    ;REPT 8
+    ;ld a, [hl+]
+    ;ld [rBCPD], a
+    ;ENDR
 
     ; zero out tile buffer
     xor a
@@ -245,12 +216,9 @@ initscore:
     ld [_text_x], a
 
     ld de, p1_label
-    ld hl, $8800
+    ld hl, _SCRN0
 
-    call draw_text
-
-    pop bc
-    pop af
+    ;call draw_text
 
 
 loop:
@@ -429,6 +397,7 @@ ball_oob_y:
 ; de: text cursor + current character tiles
 ; hl: current VRAM tile being drawn into
 draw_text:
+    ld b, 4
     push af
 
     ; The basic problem here is to shift a byte and split it
@@ -1531,14 +1500,61 @@ fill_tilemap_row:
     ret
 
 
-; preprocessor will fill in sprites and tiles according to lists inside brackets.
-Sprites: {{ sprites("blank", "ball", "ppadtop", "ppadmid", root="sprites") }}
-SpritesEnd:
-
-
-Tiles: {{ sprites("default", "goal_end", "goal_mid", "midline", root="tiles", is_bg=True) }}
+; preprocessor will fill in tiles according to lists inside brackets.
+; Tile NamedTuple is (name, type, palette) (where '*' means 'create new one')
+Tiles: {{
+    define_tiles(
+        tiles=[
+            Tile(
+                name="blank",
+                type=BG_TYPE,
+                palette="*",
+            ),
+            Tile(
+                name="ball",
+                type=SPRITE_TYPE,
+                palette="*",
+            ),
+            Tile(
+                name="ppadtop",
+                type=SPRITE_TYPE,
+                palette="*",
+            ),
+            Tile(
+                name="ppadmid",
+                type=SPRITE_TYPE,
+                palette="ppadtop",
+            ),
+            Tile(
+                name="enemy_pad",
+                type=SPRITE_TYPE,
+                palette="*",
+                palette_only=True,        # this is a clone of ppad, we just want the palette
+            ),
+            Tile(
+                name="default",
+                type=BG_TYPE,
+                palette="*",
+            ),
+            Tile(
+                name="goal_end",
+                type=BG_TYPE,
+                palette="*",
+            ),
+            Tile(
+                name="goal_mid",
+                type=BG_TYPE,
+                palette="blank",          # this is fake, we'll replace it later.
+            ),
+            Tile(
+                name="midline",
+                type=BG_TYPE,
+                palette="*",
+            ),
+        ],
+    )
+}}
 TilesEnd:
-
 
 ; sprites and tiles are paletted PNGs,
 ; so the preprocessor will extract those palettes and fill out these sections as well.
@@ -1546,8 +1562,8 @@ SpritePalettes: {{ }}
 SpritePalettesEnd:
 
 
-TilePalettes: {{ }}
-TilePalettesEnd:
+BGPalettes: {{ }}
+BGPalettesEnd:
 
 
 ObjectConstants: {{ }}
@@ -1555,9 +1571,34 @@ ObjectConstants: {{ }}
 
 Map: {{
     define_map(
-       tileset=["default", "goal_end", "goal_mid", "midline",],
-       mapfile="default_map",
-   )
+        tileset=[
+            MapTile(
+                tile="default",
+                palette="default",
+            ),
+            MapTile(
+                tile="goal_end",
+                palette="goal_end",
+            ),
+            MapTile(                  # player goal
+                tile="goal_mid",
+                palette="ppadmid",
+            ),
+            MapTile(
+                tile="midline",
+                palette="midline",
+            ),
+            MapTile(
+                tile="blank",
+                palette="blank",
+            ),
+            MapTile(
+                tile="goal_mid",       # enemy goal
+                palette="enemy_pad",
+            ),
+        ],
+        mapfile="default_map",
+    )
 }}
 MapEnd:
 
@@ -1565,12 +1606,13 @@ MapEnd:
 MapData: {{ }}
 MapDataEnd
 
+
 ; TODO consider other palettes, don't just steal this one.
 PaletteText:
     dcolor $000000
-    dcolor $ffffff
-    dcolor $999999
-    dcolor $333333
+    dcolor $000000
+    dcolor $000000
+    dcolor $000000
 
 Font: {{
     define_font(fontfile="font.png")
