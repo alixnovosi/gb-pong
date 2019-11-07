@@ -104,8 +104,6 @@ initscreen:
 
     ; load multiple palettes
     ld hl, SpritePalettes
-
-    ; TODO see if you can set up a memory load or something instead.
     REPT 64
     ld a, [hl+]
     ldh [rOCPD], a
