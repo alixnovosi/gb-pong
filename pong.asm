@@ -93,9 +93,7 @@ initscreen:
     ld [rBCPS], a
 
     ld hl, BGPalettes
-
-    ; TODO see if you can set up a memory load or something instead.
-    REPT 32
+    REPT 64
     ld a, [hl+]
     ldh [rBCPD], a
     ENDR
@@ -108,7 +106,7 @@ initscreen:
     ld hl, SpritePalettes
 
     ; TODO see if you can set up a memory load or something instead.
-    REPT 32
+    REPT 64
     ld a, [hl+]
     ldh [rOCPD], a
     ENDR
@@ -149,61 +147,48 @@ initsprite:
     ld [BallYPos], a
     ld a, 84
     ld [BallXPos], a
-    ld a, 1
+    ld a, 0
     ld [BallTileNum], a
-    ld a, %00000001
+    ld a, %00000000
     ld [BallAttrs], a
 
     ld a, 80                      ; and paddle
     ld [PlayerPadTopYPos], a
     ld a, 16
     ld [PlayerPadTopXPos], a
-    ld a, 2
+    ld a, 1
     ld [PlayerPadTopTileNum], a
-    ld a, %00000010
+    ld a, %00000001
     ld [PlayerPadTopAttrs], a
 
     ld a, 88                      ; and paddle mid
     ld [PlayerPadMidYPos], a
     ld a, 16
     ld [PlayerPadMidXPos], a
-    ld a, 3
+    ld a, 2
     ld [PlayerPadMidTileNum], a
-    ld a, %00000010
+    ld a, %00000001
     ld [PlayerPadMidAttrs], a
 
     ld a, 96                      ; and paddle bottom
     ld [PlayerPadBotYPos], a
     ld a, 16
     ld [PlayerPadBotXPos], a
-    ld a, 2
+    ld a, 1
     ld [PlayerPadBotTileNum], a
-    ld a, %01000010
+    ld a, %01000001
     ld [PlayerPadBotAttrs], a
 
     ld a, 1
     ld [_BallSpeedY], a
-    ld a, 1
     ld [_BallSpeedX], a
-    ld a, 1
     ld [_BallYDir], a
-    ld a, 1
     ld [_BallXDir], a
     ld a, 2
     ld [_P1PadSpeed], a
 
 
 initscore:
-    ; set up palette
-    ;call wait_for_vblank
-    ;ld a, %10111000
-    ;ld [rBCPS], a
-    ;ld hl, PaletteText
-    ;REPT 8
-    ;ld a, [hl+]
-    ;ld [rBCPD], a
-    ;ENDR
-
     ; zero out tile buffer
     xor a
     ld hl, _text_buffer
@@ -218,8 +203,7 @@ initscore:
     ld de, p1_label
     ld hl, _SCRN0
 
-    ;call draw_text
-
+    call draw_text
 
 loop:
     halt
@@ -1503,13 +1487,8 @@ fill_tilemap_row:
 ; preprocessor will fill in tiles according to lists inside brackets.
 ; Tile NamedTuple is (name, type, palette) (where '*' means 'create new one')
 Tiles: {{
-    define_tiles(
+    preprocess_data.define_tiles(
         tiles=[
-            Tile(
-                name="blank",
-                type=BG_TYPE,
-                palette="*",
-            ),
             Tile(
                 name="ball",
                 type=SPRITE_TYPE,
@@ -1532,6 +1511,11 @@ Tiles: {{
                 palette_only=True,        # this is a clone of ppad, we just want the palette
             ),
             Tile(
+                name="blank",
+                type=BG_TYPE,
+                palette="*",
+            ),
+            Tile(
                 name="default",
                 type=BG_TYPE,
                 palette="*",
@@ -1551,26 +1535,27 @@ Tiles: {{
                 type=BG_TYPE,
                 palette="*",
             ),
+            Tile(
+                name="goal_corn",
+                type=BG_TYPE,
+                palette="blank",
+            ),
+            Tile(
+                name="goal_edge",
+                type=BG_TYPE,
+                palette="blank",
+            ),
         ],
     )
 }}
 TilesEnd:
-
-; sprites and tiles are paletted PNGs,
-; so the preprocessor will extract those palettes and fill out these sections as well.
-SpritePalettes: {{ }}
-SpritePalettesEnd:
-
-
-BGPalettes: {{ }}
-BGPalettesEnd:
 
 
 ObjectConstants: {{ }}
 
 
 Map: {{
-    define_map(
+    preprocess_data.define_map(
         tileset=[
             MapTile(
                 tile="default",
@@ -1596,8 +1581,25 @@ Map: {{
                 tile="goal_mid",       # enemy goal
                 palette="enemy_pad",
             ),
+            MapTile(
+                tile="goal_corn",
+                palette="ppadmid",
+            ),
+            MapTile(
+                tile="goal_corn",
+                palette="enemy_pad",
+            ),
+            MapTile(
+                tile="goal_edge",
+                palette="ppadmid",
+            ),
+            MapTile(
+                tile="goal_edge",
+                palette="enemy_pad",
+            ),
         ],
         mapfile="default_map",
+        vfliplist=["goal_edge","goal_corn",],
     )
 }}
 MapEnd:
@@ -1606,15 +1608,25 @@ MapEnd:
 MapData: {{ }}
 MapDataEnd
 
+; sprites and tiles are paletted PNGs,
+; so the preprocessor will extract those palettes and fill out these sections as well.
+; these are done last because the map forces some reshuffling (on the bg palettes)
+SpritePalettes: {{ }}
+SpritePalettesEnd:
+
+
+BGPalettes: {{ }}
+BGPalettesEnd:
+
 
 ; TODO consider other palettes, don't just steal this one.
 PaletteText:
-    dcolor $000000
-    dcolor $000000
-    dcolor $000000
-    dcolor $000000
+    dcolor $FFFFFF
+    dcolor $FFFFFF
+    dcolor $FFFFFF
+    dcolor $FFFFFF
 
 Font: {{
-    define_font(fontfile="font.png")
+    preprocess_data.define_font(fontfile="font.png")
 }}
 FontEnd:
