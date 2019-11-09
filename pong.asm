@@ -45,7 +45,7 @@ _text_y        RB 1
 
 SECTION "Text constants", ROMX
 p1_label:
-    db "P1", 0
+    db "ABABB", 0
 p2_label:
     db "P2", 0
 
@@ -186,22 +186,62 @@ initsprite:
     ld [_P1PadSpeed], a
 
 
-initscore:
-    ; zero out tile buffer
-    xor a
-    ld hl, _text_buffer
-    ld c, $40
-    call fill
+init_score:
+    call StopLCD
 
-    ; draw text actually needs this stuff.
-    ld a, 4
-    ld [_text_y], a
-    ld [_text_x], a
+    ; fill map tiles.
+    ld hl, $9800
 
+; text row 1 has 0 on the edges, then 128, 130...
+    ld a, 0
+    ld [hl+], a
+    ld a, 128
+    ld c, 30
+.loop1:
+    ld [hl+], a
+    add a, 2
+    dec c
+    jr nz, .loop1
+    ld a, 0
+    ld [hl+], a
+
+    ; text row 2 same as above, but 129, 131, etc.
+    ld a, 0
+    ld [hl+], a
+    ld a, 129
+    ld c, 30
+.loop2:
+    ld [hl+], a
+    add a, 2
+    dec c
+    jr nz, .loop2
+    ld a, 0
+    ld [hl+], a
+
+
+    ; set palette (0) and bank (1) for each tile.
+    ld a, 1
+    ldh [rVBK], a
+
+    ld a, %00001000 ; bank 1, palette 0
+    ld hl, $9800
+    ld c, 32 * 2 ; two rows
+.loop3:
+    ld [hl+], a
+    dec c
+    jr nz, .loop3
+
+    call StartLCD
+
+    ; b: x-offset within current tile
+    ; de: text cursor + current character tiles
+    ; hl: current VRAM tile being drawn into
+    ld b, 0
     ld de, p1_label
-    ld hl, _SCRN0
+    ld hl, $8800
 
     call draw_text
+
 
 loop:
     halt
@@ -370,196 +410,136 @@ ball_oob_y:
 ; code.
 ; "cobbled together" because I want small text at several defined
 ; locations instead of long text at one defined location.
-; hoping to not accidentally blow away my sprites this time.
 ; as a consequence I don't fully understand this code,
 ; and it is a mix of verbatim copied and mostly copied with
 ; edited comments and commentary.
+;
+; hoping to not accidentally blow away my sprites this time.
 ;
 ; put text on screen
 ; de: text cursor + current character tiles
 ; hl: current VRAM tile being drawn into
 draw_text:
-    ld b, 4
-    push af
-
-    ; The basic problem here is to shift a byte and split it
-    ; across two other bytes, like so:
-    ;      yyyyy YYY
-    ;   xxx00000 00000000
-    ;           ↓
-    ;   xxxyyyyy YYY00000
-    ; To do this, we rotate the byte, mask the low bits, OR them
-    ; with the first byte, restore it, mask the high bits, and
-    ; then store that directly as the second byte (which should
-    ; be all zeroes anyway).
+    ; this loop waits for the next vblank, then draws a letter.
+    ; this means we display at ~60 characters per second.
 .next_letter:
-    ld a, [de]                  ; get current character
-    and a                       ; if NUL, we're done!
-    jp z, .popret
-    inc de                      ; otherwise, increment
 
-    ; could handle special chars here if we wanted.
+    ; maybe excessive
+    call StartLCD
+    call wait_for_vblank
+    call StopLCD
 
-    ; get the font character
-    push de                     ; from here, de is tiles
-    ; need to compute font char address in hl because we can only
-    ; do our math there.
+    ld a, [de]                 ; get current char
+    and a                      ; if it's NUL, we're done.
+    jr z, .popret
+    inc de                     ; otherwise, increment
+
+    ; get glyph frmo the font, which means computing font + 33*a.
+    ; this requires some register juggling,
+    ; because we need hl for 16-bit add, but hl has data we need.
+    ; we don't need de until the next loop,
+    ;so we can push it, use it for buffer space, and then restore it later.
+    push de
     push hl
-    sub 32
-    ld hl, Font
-    and a
-    jr z, .skip_letter_stride
-    ld de, 33                   ; 1 width byte + 16 * 2 tiles
 
+    ; the text is written in ASCII, but the glyphs start at 0.
+    ; TODO be careful here, our font is arranged differently than eevee's.
+    sub a, 65
+    ld hl, Font
+    ld de, 33                   ; 1 width byte + 16*2 tiles.
+
+    and a
 .letter_stride:
+    jr z, .skip_letter_stride
     add hl, de
     dec a
-    jr nz, .letter_stride
+    jr .letter_stride
 
 .skip_letter_stride:
-    ld d, h                     ; move char tile addr to de
+    ; move the glyph address into de, and restore hl
+    ld d, h
     ld e, l
+    pop hl
 
-    ld a, [de]                  ; read width
+    ; read the first byte, which is the char width.
+    ; this overwrites the character, but I have the glyph address,
+    ; so I don't need it anymore.
+    ld a, [de]
     inc de
 
-    ; copy into current tiles
-    push af                     ; stash width
-    ld c, 32                    ; 32 bytes per row
-    ld hl, _text_buffer
+    ; copy into current chars
+    ; first: copy the left part into the current chars
+    push af                       ; stash width
 
-    ; some comment-out stuff I skipped
+    ; a glyph is two chars or 32 bytes, so row_copy 32 times
+    ld c, 32
+
+    ; b is the next x position we're free to write to.
     inc b
-
 .row_copy:
-    ld a, [de]                  ; read next row of char
-    ; rotate right by b - 1 pixels
-    push bc                     ; save bc while shifting
-    ld c, $ff                   ; create a mask
+    ld a, [de]                    ; read next row of charater
+
+    ; shift right by b places with an inner loop
+    push bc                       ; preserve b while shifting
     dec b
-    jr z, .skip_rotate
 
-.rotate:
-    rrca                        ; don't quite remember this,
-                                ; but we're pushing stuff off the end
-                                ; in a way we can recover bits.
-    srl c
+.shift:                           ; shift right by b bits
+    jr z, .done_shift
+    srl a
     dec b
-    jr nz, .rotate
+    jr .shift
 
-.skip_rotate:
-    push af
-    and a, c                    ; mask right pixels
+.done_shift:
+    pop bc
 
-    ; draw to left half of text buffer
-    or a, [hl]                  ; OR with current tile
+    ; write the updated byte to VRAM
+    or a, [hl]                     ; OR with current tile
     ld [hl+], a
-
-    ; write remaining bits to right half
-    ld a, c                     ; put mask in a...
-    cpl                         ; ...invert it
-    ld c, a                     ; ...then put it back
-    pop af                      ; restore unmasked pixels from above
-    and a, c                    ; mask left pixels with inverted mask
-    ld [hl+], a                 ; store them too
-
-    ; loop and cleanup
-    inc de                      ; next row of char
-    pop bc                      ; restore counter!
+    inc de
     dec c
     jr nz, .row_copy
+    pop af                         ; restore width
 
-    pop af                      ; restore width again
+    ; part 2: copy whatever's left into the next char
+    ; TODO TODO TODO
 
-    ; Draw the buffered tiles to vram
-    ; The text buffer is treated like it's 16 pixels wide, but
-    ; VRAM is of course only 8 pixels wide, so we need to do
-    ; this in two iterations: the left two tiles, then the right
-    ; if eevee does get a diagram I should probably take that too.
-    ; text is hard, man.
-    pop hl                       ; restore hl (VRAM)
-    push af                      ; stash width, again
-    call wait_for_vblank         ; wait before drawing
-    push bc
-    push de
-
-    ; draw left two tiles
-    ld c, $20
-    ld de, _text_buffer
-
-.draw_left:
-    ld a, [de]
-    inc de
-    inc de
-    ld [hl+], a
-    dec c
-    jr nz, .draw_left
-
-    ; draw the right two tiles
-    ld c, $20
-    ld de, _text_buffer + 1
-
-.draw_right:
-    ld a, [de]
-    inc de
-    inc de
-    ld [hl+], a
-    dec c
-    jr nz, .draw_right
-
-    pop de
-    pop bc
-    pop af                       ; restore width, again
-
-    ; increment pixel offset and deal with overflow
-    ; there's a lot of TODO I'm ignoring here.
+    ; cleanup
+    ; undo b increment from way above
     dec b
-    add b                        ; a <- new x offset
-    ld bc, -32                   ; move VRAM pointer back...
-    add hl, bc                   ; to the start of the tile
+
+    ; it's possible we overflowed into the next column, in which case
+    ; we want to leave hl where it is: pointing at the next column.
+    ; otherwise, we want to back it up to where it was.
+    ; we also need to update b, the x offset.
+    add a, b                       ; a <- new x offset
+
+    ; if the new offset is 8 or more, that's actually the next column
     cp a, 8
     jr nc, .wrap_to_next_tile
-
-    ; the new offset is less than 8, so this character didn't
-    ; draw into the next tile. move the VRAM pointer back
-    ; another two tiles, to the column we started in
+    ld bc, -32                     ; a < 8, back hl up
     add hl, bc
     jr .done_wrap
 
 .wrap_to_next_tile:
-    ; the new offset is 8 or more, so this character drew into
-    ; the next tile. subtract 8, but also shift the text buffer
-    ; by copying all the "right" tiles over the "left" tiles
-    sub 8                         ; a >= 8: subtract tile width
-    push hl
-    push af
-    ld hl, _text_buffer + $40 - 1
-    ld c, $20
-
-.shift_buffer:
-    ld a, [hl-]
-    ld [hl-], a
-    dec c
-    jr nz, .shift_buffer
-
-    pop af
-    pop hl
+    sub a, 8                       ; a >= 8: subtract tile width
+    ld b, a
 
 .done_wrap:
-    ld b, a                       ; either way, store into b
+    ; either way, store the new x offset into b
+    ld b, a
 
-    ; loop
-    pop de                        ; pop text pointer
-    jp .next_letter
+    ; and loop!
+    pop de                         ; pop text pointer
+    jr .next_letter
 
 .popret:
-    call wait_for_vblank
+    call StartLCD
 
+    ; remember to reset bank to 0
     xor a
     ldh [rVBK], a
-
-    pop af
     ret
+
 
 
 move_ball:
@@ -1436,52 +1416,6 @@ fill:
     ret
 
 
-; fill a row in tilemap in a way that's helpful
-; to scores.
-; hl: where to start filling
-; de: pointer to corresponding tile to start erasing
-; b: tile to start with
-fill_tilemap_row:
-    ; Populate bank 0, the tile proper
-    xor a
-    ldh [rVBK], a
-
-    ld c, SCREEN_WIDTH_TILES
-    ld a, b
-.loop0:
-    ld [hl+], a
-    add a, 2
-    dec c
-    jr nz, .loop0
-
-    ; Populate bank 1, the bank and palette
-    ld a, 1
-    ldh [rVBK], a
-    ld a, %00001111  ; bank 1, palette 7
-    ld c, SCREEN_WIDTH_TILES
-    dec hl
-.loop1:
-    ld [hl-], a
-    dec c
-    jr nz, .loop1
-
-    ; Blank out the corresponding tiles
-    ld h, d
-    ld l, e
-    ld de, 16
-    ld c, SCREEN_WIDTH_TILES
-    xor a
-.tile_erase_loop:
-    REPT 16
-    ld [hl+], a
-    ENDR
-    add hl, de
-    dec c
-    jr nz, .tile_erase_loop
-
-    ret
-
-
 ; preprocessor will fill in tiles according to lists inside brackets.
 ; Tile NamedTuple is (name, type, palette) (where '*' means 'create new one')
 Tiles: {{
@@ -1509,7 +1443,7 @@ Tiles: {{
                 palette_only=True,        # this is a clone of ppad, we just want the palette
             ),
             Tile(
-                name="blank",
+                name="scoreboard",
                 type=BG_TYPE,
                 palette="*",
             ),
@@ -1519,14 +1453,9 @@ Tiles: {{
                 palette="*",
             ),
             Tile(
-                name="goal_end",
-                type=BG_TYPE,
-                palette="*",
-            ),
-            Tile(
                 name="goal_mid",
                 type=BG_TYPE,
-                palette="blank",          # this is fake, we'll replace it later.
+                palette="scoreboard",          # this is fake, we'll replace it later.
             ),
             Tile(
                 name="midline",
@@ -1536,12 +1465,12 @@ Tiles: {{
             Tile(
                 name="goal_corn",
                 type=BG_TYPE,
-                palette="blank",
+                palette="scoreboard",
             ),
             Tile(
                 name="goal_edge",
                 type=BG_TYPE,
-                palette="blank",
+                palette="scoreboard",
             ),
         ],
     )
@@ -1559,10 +1488,6 @@ Map: {{
                 tile="default",
                 palette="default",
             ),
-            MapTile(
-                tile="goal_end",
-                palette="goal_end",
-            ),
             MapTile(                  # player goal
                 tile="goal_mid",
                 palette="ppadmid",
@@ -1572,8 +1497,8 @@ Map: {{
                 palette="midline",
             ),
             MapTile(
-                tile="blank",
-                palette="blank",
+                tile="scoreboard",
+                palette="scoreboard",
             ),
             MapTile(
                 tile="goal_mid",       # enemy goal
@@ -1597,7 +1522,8 @@ Map: {{
             ),
         ],
         mapfile="default_map",
-        vfliplist=["goal_edge","goal_corn",],
+        hfliplist=["midline","goal_mid","goal_corn","goal_edge",],
+        vfliplist=["goal_edge","goal_corn",], # TODO why do spaces here break regex
     )
 }}
 MapEnd:
@@ -1616,13 +1542,6 @@ SpritePalettesEnd:
 BGPalettes: {{ }}
 BGPalettesEnd:
 
-
-; TODO consider other palettes, don't just steal this one.
-PaletteText:
-    dcolor $FFFFFF
-    dcolor $FFFFFF
-    dcolor $FFFFFF
-    dcolor $FFFFFF
 
 Font: {{
     preprocess_data.define_font(fontfile="font.png")

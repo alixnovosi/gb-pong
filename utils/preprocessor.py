@@ -171,11 +171,8 @@ class Data:
         # GB background dimensions.
         tile_width = 32
 
-        # markers of halfway points vertically and horizontally.
-        vhalf = 10
-        hhalf = 9
-
         width = img.width
+        height = img.height
 
         # storing map and palette data row by row to be added to class data.
         map_row_bytes = []
@@ -253,18 +250,17 @@ class Data:
             map_row_bytes.append(label)
 
             # flip across midline
-            print(hfliplist)
-            if col > hhalf and (hfliplist is None or tileset_item.tile in hfliplist):
-                vflip = 1
-            else:
-                vflip = 0
-
-            if row > vhalf and (vfliplist is None or tileset_item.tile in vfliplist):
+            if col >= (width//2) and (hfliplist is None or tileset_item.tile in hfliplist):
                 hflip = 1
             else:
                 hflip = 0
 
-            palette_row_bytes.append(f"`0{hflip}{vflip}00{palette}")
+            if row >= (height//2) and (vfliplist is None or tileset_item.tile in vfliplist):
+                vflip = 1
+            else:
+                vflip = 0
+
+            palette_row_bytes.append(f"`0{vflip}{hflip}00{palette}")
 
             col += 1
 
@@ -379,8 +375,7 @@ def process(inname, outname=None):
 
                 elif label == "Font:":
                     eval(expression)
-                    # new_line = f"{label}\n{preprocess_data.font}"
-                    new_line = f"{label}\n"
+                    new_line = f"{label}\n{preprocess_data.font}"
 
                 output_lines.append(new_line)
 
