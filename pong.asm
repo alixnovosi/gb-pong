@@ -43,11 +43,16 @@ _text_buffer   RB 40
 _text_x        RB 1
 _text_y        RB 1
 
+
 SECTION "Text constants", ROMX
 p1_label:
-    db "ABABB", 0
+    db "P1", 0
+p1_xoffset:
+    db 5
 p2_label:
     db "P2", 0
+p2_xoffset:
+    db 40
 
 
 SECTION "Vblank",        ROM0[$0040]
@@ -140,6 +145,51 @@ initscreen:
     call StartLCD                 ; free to start the LCD again
 
 
+init_score:
+
+    call wait_for_vblank
+    ; blank out tile 255
+    ld a, 1
+    ldh [rVBK], a
+    xor a
+    ld c, BYTES_PER_TILE
+    ld hl, $8800 + ($ff - $80) * BYTES_PER_TILE
+    call fill
+
+    call wait_for_vblank
+    ld hl, $9800
+    ld b, TEXT_START_TILE_1
+    call set_score_tiles
+
+    call wait_for_vblank
+    ld hl, $9800 + CANVAS_WIDTH_TILES
+    ld b, TEXT_START_TILE_1 + 1
+    call set_score_tiles
+
+    ; zero out text buffer
+    xor a
+    ld hl, _text_buffer
+    ld c, $40
+    call fill
+
+    ; P1 label
+    ; b: x-offset within current tile
+    ; de: text cursor + current character tiles
+    ; hl: current VRAM tile being drawn into
+    ld a, [p1_xoffset]
+    ld [_text_x], a
+    ld de, p1_label
+    ld hl, $8800
+
+    call draw_text
+
+    ; zero out text buffer
+    xor a
+    ld hl, _text_buffer
+    ld c, $40
+    call fill
+
+
 initsprite:
     ld a, 84                      ; initialize ball sprite
     ld [BallYPos], a
@@ -184,63 +234,6 @@ initsprite:
     ld [_BallXDir], a
     ld a, 2
     ld [_P1PadSpeed], a
-
-
-init_score:
-    call StopLCD
-
-    ; fill map tiles.
-    ld hl, $9800
-
-; text row 1 has 0 on the edges, then 128, 130...
-    ld a, 0
-    ld [hl+], a
-    ld a, 128
-    ld c, 30
-.loop1:
-    ld [hl+], a
-    add a, 2
-    dec c
-    jr nz, .loop1
-    ld a, 0
-    ld [hl+], a
-
-    ; text row 2 same as above, but 129, 131, etc.
-    ld a, 0
-    ld [hl+], a
-    ld a, 129
-    ld c, 30
-.loop2:
-    ld [hl+], a
-    add a, 2
-    dec c
-    jr nz, .loop2
-    ld a, 0
-    ld [hl+], a
-
-
-    ; set palette (0) and bank (1) for each tile.
-    ld a, 1
-    ldh [rVBK], a
-
-    ld a, %00001000 ; bank 1, palette 0
-    ld hl, $9800
-    ld c, 32 * 2 ; two rows
-.loop3:
-    ld [hl+], a
-    dec c
-    jr nz, .loop3
-
-    call StartLCD
-
-    ; b: x-offset within current tile
-    ; de: text cursor + current character tiles
-    ; hl: current VRAM tile being drawn into
-    ld b, 0
-    ld de, p1_label
-    ld hl, $8800
-
-    call draw_text
 
 
 loop:
@@ -406,6 +399,37 @@ ball_oob_y:
     ret
 
 
+; set palettes and tile indices for scoreboard tiles.
+; hl: where to start filling
+; b: tile to start with
+set_score_tiles:
+    xor a
+    ldh [rVBK], a
+
+    ld a, b
+    ld c, SCREEN_WIDTH_TILES
+.loop0:
+    ld [hl+], a
+
+    ; each successive tile in a row increases by 2
+    add a, 2
+    dec c
+    jr nz, .loop0
+
+    ; populate bank 1, the bank and palette.
+    ld a, 1
+    ldh [rVBK], a
+    ld a, %00001000 ; bank 1, palette 0
+    ld c, SCREEN_WIDTH_TILES
+    dec hl
+.loop1:
+    ld [hl-], a
+    dec c
+    jr nz, .loop1
+
+    ret
+
+
 ; this is cobbled together from eevee's anise-cheezball-rising
 ; code.
 ; "cobbled together" because I want small text at several defined
@@ -420,21 +444,15 @@ ball_oob_y:
 ; de: text cursor + current character tiles
 ; hl: current VRAM tile being drawn into
 draw_text:
-    ; this loop waits for the next vblank, then draws a letter.
-    ; this means we display at ~60 characters per second.
+    ld a, [_text_x]
+    ld b, a
 .next_letter:
-
-    ; maybe excessive
-    call StartLCD
-    call wait_for_vblank
-    call StopLCD
-
     ld a, [de]                 ; get current char
     and a                      ; if it's NUL, we're done.
     jr z, .popret
     inc de                     ; otherwise, increment
 
-    ; get glyph frmo the font, which means computing font + 33*a.
+    ; get glyph from the font, which means computing font + 33*a.
     ; this requires some register juggling,
     ; because we need hl for 16-bit add, but hl has data we need.
     ; we don't need de until the next loop,
@@ -442,24 +460,24 @@ draw_text:
     push de
     push hl
 
-    ; the text is written in ASCII, but the glyphs start at 0.
-    ; TODO be careful here, our font is arranged differently than eevee's.
-    sub a, 65
+    ; ASCII offset? I think?
+    sub a, 32
     ld hl, Font
-    ld de, 33                   ; 1 width byte + 16*2 tiles.
 
     and a
-.letter_stride:
     jr z, .skip_letter_stride
+
+    ld de, 33                   ; 1 width byte + 16*2 tiles.
+
+.letter_stride:
     add hl, de
     dec a
-    jr .letter_stride
+    jr nz, .letter_stride
 
 .skip_letter_stride:
     ; move the glyph address into de, and restore hl
     ld d, h
     ld e, l
-    pop hl
 
     ; read the first byte, which is the char width.
     ; this overwrites the character, but I have the glyph address,
@@ -468,40 +486,101 @@ draw_text:
     inc de
 
     ; copy into current chars
-    ; first: copy the left part into the current chars
     push af                       ; stash width
-
-    ; a glyph is two chars or 32 bytes, so row_copy 32 times
-    ld c, 32
+    ld c, 32                      ; 32 bytes per row
+    ld hl, _text_buffer
 
     ; b is the next x position we're free to write to.
     inc b
+
 .row_copy:
     ld a, [de]                    ; read next row of charater
 
-    ; shift right by b places with an inner loop
+    ; rotate right by b-1 pixels --- remember, b contains the
+    ; x-offset within the current tile - where to start drawing
     push bc                       ; preserve b while shifting
+    ld c, $ff                     ; initialize mask
     dec b
+    jr z, .skip_rotate
 
-.shift:                           ; shift right by b bits
-    jr z, .done_shift
-    srl a
+.rotate:
+    ; rotate glyph (a), but shift the mask (c), so that the
+    ; left end of the mask fills up with zeroes
+    rrca
+    srl c
     dec b
-    jr .shift
+    jr nz, .rotate
 
-.done_shift:
-    pop bc
+.skip_rotate:
+    push af                       ; preserve glyph
+    and a, c                      ; mask right pixels
 
-    ; write the updated byte to VRAM
-    or a, [hl]                     ; OR with current tile
+    ; draw to left half of text buffer
+    or a, [hl]                    ; OR with current tile
     ld [hl+], a
-    inc de
+
+    ; write the remaining bits to right half
+    ld a, c                       ; put mask in a...
+    cpl                           ; ...to invert it...
+    ld c, a                       ;... then put it back
+    pop af                        ; restore unmasked glyph
+    and a, c                      ; mask left pixels
+    ld [hl+], a                   ; and store them
+
+    ; clean up, and loop to next row
+    inc de                        ; next row of glyph
+    pop bc                        ; restore counter!
     dec c
     jr nz, .row_copy
-    pop af                         ; restore width
+    pop af                        ; restore width
 
-    ; part 2: copy whatever's left into the next char
-    ; TODO TODO TODO
+    ; draw the buffered tiles to vram
+    ; the text buffer is treated like it's 16 pixels wide, but
+    ; VRAM is of course only 8 pixels wide, so we need to do this in two iterations:
+    ; the left two tiles, then the right
+    pop hl                        ; restore hl (VRAM)
+    push af                       ; stash width, again
+
+    call wait_for_vblank          ; always wait before drawing
+
+    push bc
+    push de
+
+    ; draw left two tiles.
+    ld c, $20
+    ld de, _text_buffer
+
+.draw_left:
+    ld a, [de]
+
+    ; this double inc fixes deinterlacing from our memory storage being different than
+    ; what vram wants.
+    inc de
+    inc de
+
+    ld [hl+], a
+    dec c
+    jr nz, .draw_left
+
+    ; draw the right two tiles
+    ld c, $20
+
+    ; this time, start from the SECOND byte, which will grab all the bytes skipped
+    ; by the previous loop
+    ld de, _text_buffer + 1
+
+.draw_right:
+    ld a, [de]
+    inc de
+    inc de
+
+    ld [hl+], a
+    dec c
+    jr nz, .draw_right
+
+    pop de
+    pop bc
+    pop af                         ; restore width, again
 
     ; cleanup
     ; undo b increment from way above
@@ -513,16 +592,42 @@ draw_text:
     ; we also need to update b, the x offset.
     add a, b                       ; a <- new x offset
 
-    ; if the new offset is 8 or more, that's actually the next column
+    ; regardless of of whether this glyph overflowed, the VRAM
+    ; pointer was left at the beginning of the next (empty) column,
+    ; and it needs rewinding to the right column
+    ld bc, -32                     ; move the VRAM pointer back...
+    add hl, bc                     ; ... to the start of the char
     cp a, 8
     jr nc, .wrap_to_next_tile
-    ld bc, -32                     ; a < 8, back hl up
+
+    ; the new offset is less than 8, sot his character didn't
+    ; actually draw anything in the right column. move the VRAM pointer back a second
+    ; time, to the left column, which still has space left.
     add hl, bc
     jr .done_wrap
 
 .wrap_to_next_tile:
-    sub a, 8                       ; a >= 8: subtract tile width
-    ld b, a
+    ; the new offset is 8 or more, so this character drew into the next char.
+    ; subtract 8, but also shift the text buffer by copying all the "right" chars over
+    ; the "left" chars.
+    sub a, 8                       ; a >= 8: subtract char width
+    push hl
+    push af
+
+    ; the easy way to do this is to walk backwards through the buffer.
+    ; this leaves garbage in the right column, but that's okay --- it gets overwritten in the
+    ; next loop, before the buffer is copied into VRAM
+    ld hl, _text_buffer + ($40 - 1)
+    ld c, $20
+
+.shift_buffer:
+    ld a, [hl-]
+    ld [hl-], a
+    dec c
+    jr nz, .shift_buffer
+
+    pop af
+    pop hl
 
 .done_wrap:
     ; either way, store the new x offset into b
@@ -530,16 +635,16 @@ draw_text:
 
     ; and loop!
     pop de                         ; pop text pointer
-    jr .next_letter
+    jp .next_letter
 
 .popret:
-    call StartLCD
+    call wait_for_vblank
 
     ; remember to reset bank to 0
     xor a
     ldh [rVBK], a
-    ret
 
+    ret
 
 
 move_ball:

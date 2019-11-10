@@ -138,7 +138,7 @@ class Data:
         for i, [start, end] in enumerate(bounds):
             letter = [
                 f"; alphabet item {i}",
-                f"    db {end-start+1}",
+                f"    db {end-start+2}",
             ]
 
             # we're just indexing into the 1D data array and pulling out letters here
