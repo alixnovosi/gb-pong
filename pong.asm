@@ -40,19 +40,17 @@ _P1PadSpeed    RB 1
 
                RSSET  _TEXT_BUFFER
 _text_buffer   RB 40
-_text_x        RB 1
-_text_y        RB 1
 
 
 SECTION "Text constants", ROMX
 p1_label:
-    db "P1: ", 0
-p1_xoffset:
-    db 5
+    db "P1:", 0
+p1_static_test_score:
+    db " 0", 0
 p2_label:
-    db "P2: ", 0
-p2_xoffset:
-    db 40
+    db "P2:", 0
+p2_static_test_score:
+    db " 0", 0
 
 
 SECTION "Vblank",        ROM0[$0040]
@@ -146,13 +144,6 @@ initscreen:
 
 
 init_score:
-
-    call wait_for_vblank
-
-    ; TODO wrap this in a function, we have to do it on score init
-    ; and at least partially do it on score update.
-    ; TODO work out how to selectively blank some subset of the scoreboard tiles.
-
     ; blank out tile 255
     ld a, 1
     ldh [rVBK], a
@@ -161,57 +152,7 @@ init_score:
     ld hl, $8800 + ($ff - $80) * BYTES_PER_TILE
     call fill
 
-    ; row 1
-    call wait_for_vblank
-    ld hl, _SCRN0
-    ld b, TEXT_START_TILE_1
-    ld de, $8800 + (TEXT_START_TILE_1 - $80) * BYTES_PER_TILE
-    call set_score_tiles
-
-    ; row 2
-    call wait_for_vblank
-    ld hl, _SCRN0 + CANVAS_WIDTH_TILES
-    ld b, TEXT_START_TILE_1 + 1
-    ld de, $8800 + (TEXT_START_TILE_1 + 1 - $80) * BYTES_PER_TILE
-    call set_score_tiles
-
-
-    ; zero out text buffer
-    xor a
-    ld hl, _text_buffer
-    ld c, $40
-    call fill
-
-    ; P1 label
-    ; b: x-offset within current tile
-    ; de: text cursor + current character tiles
-    ; hl: current VRAM tile being drawn into
-    ld a, 4
-    ld [_text_y], a
-    ld b, 4
-
-    ld de, p1_label
-    ld hl, $8800
-
-    call draw_text
-
-.test:
-    ; zero out text buffer
-    xor a
-    ld hl, _text_buffer
-    ld c, $40
-    call fill
-
-    call wait_for_vblank
-
-    ld a, 4
-    ld [_text_y], a
-    ld b, 4
-
-    ld de, p2_label
-    ld hl, $8800 + (32 * 10) + 32
-
-    call draw_text
+    call draw_scores
 
 
 initsprite:
@@ -422,17 +363,152 @@ ball_oob_y:
     ret
 
 
+; draw score labels and pull scores from memory to write them.
+draw_scores:
+    ; TODO implement painful logic to parse digits from memory and write score.
+    ; and also to replace high zeros with spaces.
+
+    ld de, P1_LABEL_OFFSET_BYTES
+    ld b, P1_LABEL_OFFSET
+    ld hl, p1_label
+    ld c, 0
+    call draw_score_sec
+
+    ld de, P1_SCORE_OFFSET_BYTES
+    ld b, P1_SCORE_OFFSET
+    ld hl, p1_static_test_score
+    ld c, 0
+    call draw_score_sec
+
+    ret
+
+; de: tile offset (bytes, could easily overflow a single byte so it's gotta be 16bit)
+; bc: tile offset (number of tiles (in b))
+; hl: text label
+draw_score_sec:
+
+    ; push all onto the stack because we need to clobber them
+    ; a lot for other calls
+    push af
+    push hl
+    push de
+    push bc
+
+    call wait_for_vblank
+
+    ; SETTING UP SCORE ROW 1
+    ld hl, _SCRN0
+    ; gotta swap b and c here.
+    ; pushing it because I don't trust a weird carry to not happen.
+    push bc
+
+    ld c, b
+    ld b, 0
+    add hl, bc
+
+    pop bc
+
+    ; b already has TILE_OFFSET so we can just add to it
+    ; or, we could, if registers were nice instead of hell
+    ld a, b
+    add a, TEXT_START_TILE_1
+    ld b, a
+
+    ; we need hl for math
+    push hl
+
+    ; de already had TILE_OFFSET_BYTES, so we can just add to THAT
+    ; again, no, it's harder. but doable.
+    ld h, d
+    ld l, e
+    ld de, $8800 + (TEXT_START_TILE_1 - $80) * BYTES_PER_TILE
+    add hl, de
+    ld d, h
+    ld e, l
+
+    pop hl
+
+    ; easy
+    ld c, 4
+    call set_score_tiles
+
+    ; restore values for a slightly modified repeat
+    pop bc
+    pop de
+    pop hl
+
+    ; and re-store for ONE more call at the end
+    push hl ; text label
+    push de ; bytes offset
+
+    ; SETTING UP SCORE ROW 2
+    ; prepare hl
+    ld hl, _SCRN0 + CANVAS_WIDTH_TILES
+    ; gotta swap b and c here.
+    ; pushing it because I don't trust a weird carry to not happen.
+    push bc
+    ld c, b
+    ld b, 0
+    add hl, bc
+
+    pop bc
+
+    ; prepare b
+    ld a, b
+    add a, TEXT_START_TILE_1 + 1
+    ld b, a
+
+    ; we still need hl for math
+    push hl
+
+    ; prepare de
+    ld h, d
+    ld l, e
+    ld de, $8800 + (TEXT_START_TILE_1 + 1 - $80) * BYTES_PER_TILE
+    add hl, de
+    ld d, h
+    ld e, l
+
+    pop hl
+
+    ; still easy
+    ld c, 4
+    call set_score_tiles
+
+    ; zero out text buffer
+    xor a
+    ld hl, _text_buffer
+    ld c, TEXT_BUFFER_SIZE
+    call fill
+
+    ; pull values off the stack once more to clean up,
+    ; and to fetch the bytes offfset and text label.
+    pop hl ; bytes offset
+    ld bc, $8800
+    add hl, bc
+
+    pop de ; text label
+    call draw_text
+
+    pop af
+
+    ret
+
+
 ; set palettes and tile indices for scoreboard tiles.
 ; hl: where to start filling
 ; b: tile to start with
+; c: tiles to set up
 set_score_tiles:
 
     ; populate bank 0, the tile proper
     xor a
     ldh [rVBK], a
 
+    ; we need to get this back later
+    push bc
+
     ld a, b
-    ld c, SCREEN_WIDTH_TILES
 .loop0:
     ld [hl+], a
 
@@ -445,7 +521,10 @@ set_score_tiles:
     ld a, 1
     ldh [rVBK], a
     ld a, %00001000 ; bank 1, palette 0
-    ld c, SCREEN_WIDTH_TILES
+
+    pop bc
+    push bc
+
     dec hl
 .loop1:
     ld [hl-], a
@@ -456,7 +535,10 @@ set_score_tiles:
     ld h, d
     ld l, e
     ld de, 16
-    ld c, SCREEN_WIDTH_TILES
+
+    pop bc
+    push bc
+
     xor a
 .tile_erase_loop
     REPT 16
@@ -465,6 +547,9 @@ set_score_tiles:
     add hl, de
     dec c
     jr nz, .tile_erase_loop
+
+    ; clear this off the stack
+    pop bc
 
     ret
 
@@ -484,6 +569,9 @@ set_score_tiles:
 ; hl: current VRAM tile being drawn into
 draw_text:
     nop
+
+    ; TODO we could not hard-code this but I don't think it matters.
+    ld b, 2
 
 .next_letter:
     ld a, [de]                 ; get current char
@@ -1539,6 +1627,8 @@ StartLCD:
 SECTION "Utility code", ROM0
 ; idle until next vblank
 wait_for_vblank:
+    push af
+
 .vblank_loop:
     ei
     halt                        ; wait for interrupt
@@ -1547,6 +1637,8 @@ wait_for_vblank:
     cp 145                      ; is it on line 145
     jr nz, .vblank_loop         ; if not keep waiting
     ei
+
+    pop af
 
     ret
 
