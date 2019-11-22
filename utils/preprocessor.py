@@ -105,47 +105,54 @@ class Data:
         img = Image.open(f"data/{fontfile}")
         fontimg =  img.palette.palette
 
-        height = img.height
-        width = img.width
+        width, height = img.size
 
+        if height != 16:
+            raise RuntimeError("Font image must be exactly 16 pixels tall")
         # read sentinel values to get starts/ends of chars.
         # sentinel values are assumed to be in the first row,
         # with one blank row,
         # and then letter data.
         bounds = []
         data = img.getdata()
-        last_filled_index = None
         current_pair = []
         for i in range(img.width):
             pixel = data[i]
 
             if pixel == 1:
-                if len(current_pair) > 0:
+
+                # check for two adjacent pixels, as a sign to stop.
+                if i+1 < img.width-1 and data[i+1] == 1:
+                    current_pair.append(i-2)
+                    bounds.append(current_pair)
+                    break
+
+                # we've finished a letter, put it away.
+                elif len(current_pair) > 0:
                     current_pair.append(i-2)
                     bounds.append(current_pair)
                     current_pair = [i]
+
+                # start a new pair.
                 else:
                     current_pair.append(i)
 
-                # take two adjacent sentinel pixels as a sign to stop
-                if last_filled_index is not None and last_filled_index - i == 1:
-                    break
-
-                last_filled_index = i
-
         # grab letter data and generate db blocks to be "\n".join'd
         letters = []
+
         for i, [start, end] in enumerate(bounds):
             letter = [
-                f"; alphabet item {i}",
+                f"; {chr(i+32)}",
                 f"    db {end-start+2}",
             ]
 
             # we're just indexing into the 1D data array and pulling out letters here
-            for r in range(2, height):
+            for r in range(height):
+
                 row = []
-                for c in range(start, end+1):
-                    row.append(str(data[r * width + c]))
+                if r != 0:
+                    for c in range(start, end+1):
+                        row.append(str(data[r * width + c]))
 
                 row.extend(["0"] * (8-len(row)))
 

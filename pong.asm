@@ -46,11 +46,11 @@ _text_y        RB 1
 
 SECTION "Text constants", ROMX
 p1_label:
-    db "P1", 0
+    db "P1: ", 0
 p1_xoffset:
     db 5
 p2_label:
-    db "P2", 0
+    db "P2: ", 0
 p2_xoffset:
     db 40
 
@@ -148,6 +148,11 @@ initscreen:
 init_score:
 
     call wait_for_vblank
+
+    ; TODO wrap this in a function, we have to do it on score init
+    ; and at least partially do it on score update.
+    ; TODO work out how to selectively blank some subset of the scoreboard tiles.
+
     ; blank out tile 255
     ld a, 1
     ldh [rVBK], a
@@ -156,15 +161,20 @@ init_score:
     ld hl, $8800 + ($ff - $80) * BYTES_PER_TILE
     call fill
 
+    ; row 1
     call wait_for_vblank
-    ld hl, $9800
+    ld hl, _SCRN0
     ld b, TEXT_START_TILE_1
+    ld de, $8800 + (TEXT_START_TILE_1 - $80) * BYTES_PER_TILE
     call set_score_tiles
 
+    ; row 2
     call wait_for_vblank
-    ld hl, $9800 + CANVAS_WIDTH_TILES
+    ld hl, _SCRN0 + CANVAS_WIDTH_TILES
     ld b, TEXT_START_TILE_1 + 1
+    ld de, $8800 + (TEXT_START_TILE_1 + 1 - $80) * BYTES_PER_TILE
     call set_score_tiles
+
 
     ; zero out text buffer
     xor a
@@ -176,24 +186,37 @@ init_score:
     ; b: x-offset within current tile
     ; de: text cursor + current character tiles
     ; hl: current VRAM tile being drawn into
-    ld a, [p1_xoffset]
-    ld [_text_x], a
+    ld a, 4
+    ld [_text_y], a
+    ld b, 4
+
     ld de, p1_label
     ld hl, $8800
 
     call draw_text
 
+.test:
     ; zero out text buffer
     xor a
     ld hl, _text_buffer
     ld c, $40
     call fill
 
+    call wait_for_vblank
+
+    ld a, 4
+    ld [_text_y], a
+    ld b, 4
+
+    ld de, p2_label
+    ld hl, $8800 + (32 * 10) + 32
+
+    call draw_text
+
 
 initsprite:
     ld a, 84                      ; initialize ball sprite
     ld [BallYPos], a
-    ld a, 84
     ld [BallXPos], a
     ld a, 0
     ld [BallTileNum], a
@@ -403,6 +426,8 @@ ball_oob_y:
 ; hl: where to start filling
 ; b: tile to start with
 set_score_tiles:
+
+    ; populate bank 0, the tile proper
     xor a
     ldh [rVBK], a
 
@@ -427,6 +452,20 @@ set_score_tiles:
     dec c
     jr nz, .loop1
 
+    ; blank out the corresponding tiles
+    ld h, d
+    ld l, e
+    ld de, 16
+    ld c, SCREEN_WIDTH_TILES
+    xor a
+.tile_erase_loop
+    REPT 16
+    ld [hl+], a
+    ENDR
+    add hl, de
+    dec c
+    jr nz, .tile_erase_loop
+
     ret
 
 
@@ -444,8 +483,8 @@ set_score_tiles:
 ; de: text cursor + current character tiles
 ; hl: current VRAM tile being drawn into
 draw_text:
-    ld a, [_text_x]
-    ld b, a
+    nop
+
 .next_letter:
     ld a, [de]                 ; get current char
     and a                      ; if it's NUL, we're done.
