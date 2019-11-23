@@ -3,13 +3,6 @@ INCLUDE "includes/memory.asm"
 
 INCLUDE "constants.asm"
 
-dcolor: MACRO  ; COLOR($rrggbb) -> gbc representation
-_r = ((\1) & $ff0000) >> 16 >> 3
-_g = ((\1) & $00ff00) >> 8  >> 3
-_b = ((\1) & $0000ff) >> 0  >> 3
-    dw (_r << 0) | (_g << 5) | (_b << 10)
-ENDM
-
                      RSSET _OAM_DATA    ; Base location is _OAM_DATA
 BallYPos             RB 1               ; Set each to an incrementing location
 BallXPos             RB 1
@@ -37,6 +30,8 @@ _BallSpeedX    RB 1
 _BallYDir      RB 1               ; 1 is down
 _BallXDir      RB 1               ; 1 is right
 _P1PadSpeed    RB 1
+_p1_score      RB 3
+_p2_score      RB 3
 
                RSSET  _TEXT_BUFFER
 _text_buffer   RB 40
@@ -44,13 +39,13 @@ _text_buffer   RB 40
 
 SECTION "Text constants", ROMX
 p1_label:
-    db "P1:", 0
+    db "P1 ", 0
 p1_static_test_score:
-    db " 99", 0
+    db "00", 0
 p2_label:
-    db "P2:", 0
+    db "P2 ", 0
 p2_static_test_score:
-    db "  0", 0
+    db "00", 0
 
 
 SECTION "Vblank",        ROM0[$0040]
@@ -144,6 +139,17 @@ initscreen:
 
 
 init_score:
+    ; move default scores to score vars
+    ld hl, p1_static_test_score
+    ld de, _p1_score
+    ld bc, 3
+    call mem_Copy
+
+    ld hl, p2_static_test_score
+    ld de, _p2_score
+    ld bc, 3
+    call mem_Copy
+
     ; blank out tile 255
     ld a, 1
     ldh [rVBK], a
@@ -152,7 +158,7 @@ init_score:
     ld hl, $8800 + ($ff - $80) * BYTES_PER_TILE
     call fill
 
-    call draw_scores
+    call init_scores
 
 
 initsprite:
@@ -199,6 +205,9 @@ initsprite:
     ld a, 2
     ld [_P1PadSpeed], a
 
+    ld a, 250
+    push af
+
 
 loop:
     halt
@@ -229,6 +238,29 @@ loop:
     call nz, p1_move_down
     pop af
 
+    ; use af as a counter to do a test score change.
+    ; later we will reset screen on points, so this won't be necessary
+    pop af
+    cp 0
+    jp z, .reset_counter
+
+.update_counter:
+    dec a
+    push af
+    jp .counter_check_done
+
+.reset_counter:
+    xor a
+    call increment_score
+
+    ld a, 1
+    call increment_score
+
+    call draw_scores
+    ld a, 120
+    push af
+
+.counter_check_done:
     jr loop
 
 
@@ -364,12 +396,56 @@ ball_oob_y:
 
 
 ; draw score labels and pull scores from memory to write them.
-draw_scores:
+init_scores:
     ; TODO implement painful logic to parse digits from memory and write score.
     ; and also to replace high zeros with spaces.
 
     call wait_for_vblank
 
+    call draw_labels
+    call draw_scores
+
+    ret
+
+
+
+; increment score, stored as a decimal string
+; a: 0 for p1, 1 for p2
+increment_score:
+    jp nz, .p2
+    ld hl, _p1_score
+    jp .loaded
+.p2:
+    ld hl, _p2_score
+
+.loaded:
+    ; get to second byte
+    inc hl
+    ld a, [hl]
+
+    ; increment first digit and then check for an overflow
+    inc a
+    ld [hl], a
+
+    sub a, 58 ; ':', one past digit 9
+    jr c, .nooverflow
+
+    ; reset first digit
+    ld a, 48  ; '0'
+    ld [hl], a
+
+    ; we gotta deal with the second digit
+    dec hl
+    ld a, [hl]
+    inc a
+    ld [hl], a
+
+.nooverflow:
+
+    ret
+
+
+draw_labels:
     ld b, P1_LABEL_OFFSET
     ld de, P1_LABEL_OFFSET_BYTES
     ld hl, p1_label
@@ -377,104 +453,46 @@ draw_scores:
     call draw_score_sec
 
     ; garbage prevention by cleaning the palette after our last square
-    ld a, P1_LABEL_OFFSET
-    add a, P1_LABEL_SIZE
-    inc a
-    call garbage_cleanup
-
-    ld b, P1_SCORE_OFFSET
-    ld de, P1_SCORE_OFFSET_BYTES
-    ld hl, p1_static_test_score
-    ld c, P1_SCORE_SIZE
-    call draw_score_sec
-
-    ; garbage prevention by cleaning the palette after our last square
-    ld a, P2_SCORE_OFFSET
-    add a, P2_SCORE_SIZE
-    inc a
+    ld a, P1_LABEL_OFFSET + P1_LABEL_SIZE
+    ld d, P1_SCORE_OFFSET - (P1_LABEL_OFFSET + P1_LABEL_SIZE)
     call garbage_cleanup
 
     ld b, P2_LABEL_OFFSET
     ld de, P2_LABEL_OFFSET_BYTES
     ld hl, p2_label
-    ld c, 3
+    ld c, P2_LABEL_SIZE
     call draw_score_sec
 
     ; garbage prevention by cleaning the palette after our last square
-    ld a, P2_LABEL_OFFSET
-    add a, P2_LABEL_SIZE
-    inc a
-    call garbage_cleanup
-
-    ld b, P2_SCORE_OFFSET
-    ld de, P2_SCORE_OFFSET_BYTES
-    ld hl, p2_static_test_score
-    ld c, 3
-    call draw_score_sec
-
-    ; we have to do cleanup for the previous label after the current one is drawn.
-    ld a, P2_LABEL_OFFSET
-    add a, P2_LABEL_SIZE
-    inc a
+    ld a, P2_LABEL_OFFSET + P2_LABEL_SIZE
+    ld d, P2_SCORE_OFFSET - (P2_LABEL_OFFSET + P2_LABEL_SIZE) + 1
     call garbage_cleanup
 
     ret
 
 
-; clean up the one tile of broken text that draw_score_sec produces
-; hl: text label
-; hl: where to start filling
-; de: pointer to corresponding tile to start erasing
-; b: tile to start with
-; c: tiles to erase
-cleanup_score_sec:
-    ; populate bank 0, the tile proper
-    ld a, 0
-    ldh [rVBK], a
+draw_scores:
+    ld b, P1_SCORE_OFFSET
+    ld de, P1_SCORE_OFFSET_BYTES
+    ld hl, _p1_score
+    ld c, P1_SCORE_SIZE
+    call draw_score_sec
 
-    ; we need to get this back later
-    push bc
+    ; garbage prevention by cleaning the palette after our last square
+    ld a, P1_SCORE_OFFSET + P1_SCORE_SIZE
+    ld d, P2_LABEL_OFFSET - (P1_SCORE_OFFSET + P1_SCORE_SIZE) + 1
+    call garbage_cleanup
 
-    ld a, b
-.loop0:
-    ld [hl+], a
+    ld b, P2_SCORE_OFFSET
+    ld de, P2_SCORE_OFFSET_BYTES
+    ld hl, _p2_score
+    ld c, P2_SCORE_SIZE
+    call draw_score_sec
 
-    ; each successive tile in a row increases by 2
-    add a, 2
-    dec c
-    jr nz, .loop0
-
-    ; populate bank 1, the bank and palette.
-    ld a, 1
-    ldh [rVBK], a
-    ld a, %00001000 ; bank 1, palette 0
-
-    pop bc
-    push bc
-
-    dec hl
-.loop1:
-    ld [hl-], a
-    dec c
-    jr nz, .loop1
-
-    ; blank out the corresponding tiles
-    ld h, d
-    ld l, e
-    ld de, 8
-
-    ; do this before restoring c
-    xor a
-
-    pop bc
-
-.tile_erase_loop
-    REPT 8
-    ld [hl+], a
-    ENDR
-    add hl, de
-    dec c
-    jr nz, .tile_erase_loop
+    ; garbage prevention by cleaning the palette after our last square
+    ld a, P2_SCORE_OFFSET + P2_SCORE_SIZE
+    ld d, 2
+    call garbage_cleanup
 
     ret
 
@@ -593,8 +611,9 @@ draw_score_sec:
 
 ; clean up garbage in a tile
 ; a: tile offset
+; d: number of tiles
 garbage_cleanup:
-    ld b, a
+    ld c, a    ; store in c so we don't clobber, and can do a bc add later.
 
     ; cleanup: clear palette for one tile just before where we started
     ld a, 1
@@ -603,19 +622,32 @@ garbage_cleanup:
     ; and palettes for map squares
     ld hl, _SCRN0
 
-    ld c, b
-    ld b, 0
-
+    xor b
     add hl, bc
-    dec hl
+
     dec hl
 
     ld a, %00001000
-    ld [hl], a
 
+    inc d
+    push de
+.loop0:
+    ld [hl+], a
+
+    dec d
+    jr nz, .loop0
+
+    dec hl
     ld bc, CANVAS_WIDTH_TILES
     add hl, bc
-    ld [hl], a
+
+    pop de
+
+.loop1:
+    ld [hl-], a
+
+    dec d
+    jr nz, .loop1
 
     xor a
     ld [rVBK], a
@@ -1867,7 +1899,7 @@ Map: {{
             ),
             MapTile(
                 tile="scoreboard",
-                palette="scoreboard",
+                palette="void",
             ),
             MapTile(
                 tile="goal_mid",       # enemy goal

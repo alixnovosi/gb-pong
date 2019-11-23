@@ -142,7 +142,7 @@ class Data:
 
         for i, [start, end] in enumerate(bounds):
             letter = [
-                f"; {chr(i+32)}",
+                f"; {i+32} {chr(i+32)}",
                 f"    db {end-start+2}",
             ]
 
