@@ -46,11 +46,11 @@ SECTION "Text constants", ROMX
 p1_label:
     db "P1:", 0
 p1_static_test_score:
-    db " 0", 0
+    db " 99", 0
 p2_label:
     db "P2:", 0
 p2_static_test_score:
-    db " 0", 0
+    db "  0", 0
 
 
 SECTION "Vblank",        ROM0[$0040]
@@ -368,141 +368,68 @@ draw_scores:
     ; TODO implement painful logic to parse digits from memory and write score.
     ; and also to replace high zeros with spaces.
 
-    ld de, P1_LABEL_OFFSET_BYTES
-    ld b, P1_LABEL_OFFSET
-    ld hl, p1_label
-    ld c, 0
-    call draw_score_sec
-
-    ld de, P1_SCORE_OFFSET_BYTES
-    ld b, P1_SCORE_OFFSET
-    ld hl, p1_static_test_score
-    ld c, 0
-    call draw_score_sec
-
-    ret
-
-; de: tile offset (bytes, could easily overflow a single byte so it's gotta be 16bit)
-; bc: tile offset (number of tiles (in b))
-; hl: text label
-draw_score_sec:
-
-    ; push all onto the stack because we need to clobber them
-    ; a lot for other calls
-    push af
-    push hl
-    push de
-    push bc
-
     call wait_for_vblank
 
-    ; SETTING UP SCORE ROW 1
-    ld hl, _SCRN0
-    ; gotta swap b and c here.
-    ; pushing it because I don't trust a weird carry to not happen.
-    push bc
+    ld b, P1_LABEL_OFFSET
+    ld de, P1_LABEL_OFFSET_BYTES
+    ld hl, p1_label
+    ld c, P1_LABEL_SIZE
+    call draw_score_sec
 
-    ld c, b
-    ld b, 0
-    add hl, bc
+    ; garbage prevention by cleaning the palette after our last square
+    ld a, P1_LABEL_OFFSET
+    add a, P1_LABEL_SIZE
+    inc a
+    call garbage_cleanup
 
-    pop bc
+    ld b, P1_SCORE_OFFSET
+    ld de, P1_SCORE_OFFSET_BYTES
+    ld hl, p1_static_test_score
+    ld c, P1_SCORE_SIZE
+    call draw_score_sec
 
-    ; b already has TILE_OFFSET so we can just add to it
-    ; or, we could, if registers were nice instead of hell
-    ld a, b
-    add a, TEXT_START_TILE_1
-    ld b, a
+    ; garbage prevention by cleaning the palette after our last square
+    ld a, P2_SCORE_OFFSET
+    add a, P2_SCORE_SIZE
+    inc a
+    call garbage_cleanup
 
-    ; we need hl for math
-    push hl
+    ld b, P2_LABEL_OFFSET
+    ld de, P2_LABEL_OFFSET_BYTES
+    ld hl, p2_label
+    ld c, 3
+    call draw_score_sec
 
-    ; de already had TILE_OFFSET_BYTES, so we can just add to THAT
-    ; again, no, it's harder. but doable.
-    ld h, d
-    ld l, e
-    ld de, $8800 + (TEXT_START_TILE_1 - $80) * BYTES_PER_TILE
-    add hl, de
-    ld d, h
-    ld e, l
+    ; garbage prevention by cleaning the palette after our last square
+    ld a, P2_LABEL_OFFSET
+    add a, P2_LABEL_SIZE
+    inc a
+    call garbage_cleanup
 
-    pop hl
+    ld b, P2_SCORE_OFFSET
+    ld de, P2_SCORE_OFFSET_BYTES
+    ld hl, p2_static_test_score
+    ld c, 3
+    call draw_score_sec
 
-    ; easy
-    ld c, 4
-    call set_score_tiles
-
-    ; restore values for a slightly modified repeat
-    pop bc
-    pop de
-    pop hl
-
-    ; and re-store for ONE more call at the end
-    push hl ; text label
-    push de ; bytes offset
-
-    ; SETTING UP SCORE ROW 2
-    ; prepare hl
-    ld hl, _SCRN0 + CANVAS_WIDTH_TILES
-    ; gotta swap b and c here.
-    ; pushing it because I don't trust a weird carry to not happen.
-    push bc
-    ld c, b
-    ld b, 0
-    add hl, bc
-
-    pop bc
-
-    ; prepare b
-    ld a, b
-    add a, TEXT_START_TILE_1 + 1
-    ld b, a
-
-    ; we still need hl for math
-    push hl
-
-    ; prepare de
-    ld h, d
-    ld l, e
-    ld de, $8800 + (TEXT_START_TILE_1 + 1 - $80) * BYTES_PER_TILE
-    add hl, de
-    ld d, h
-    ld e, l
-
-    pop hl
-
-    ; still easy
-    ld c, 4
-    call set_score_tiles
-
-    ; zero out text buffer
-    xor a
-    ld hl, _text_buffer
-    ld c, TEXT_BUFFER_SIZE
-    call fill
-
-    ; pull values off the stack once more to clean up,
-    ; and to fetch the bytes offfset and text label.
-    pop hl ; bytes offset
-    ld bc, $8800
-    add hl, bc
-
-    pop de ; text label
-    call draw_text
-
-    pop af
+    ; we have to do cleanup for the previous label after the current one is drawn.
+    ld a, P2_LABEL_OFFSET
+    add a, P2_LABEL_SIZE
+    inc a
+    call garbage_cleanup
 
     ret
 
 
-; set palettes and tile indices for scoreboard tiles.
+; clean up the one tile of broken text that draw_score_sec produces
+; hl: text label
 ; hl: where to start filling
+; de: pointer to corresponding tile to start erasing
 ; b: tile to start with
-; c: tiles to set up
-set_score_tiles:
-
+; c: tiles to erase
+cleanup_score_sec:
     ; populate bank 0, the tile proper
-    xor a
+    ld a, 0
     ldh [rVBK], a
 
     ; we need to get this back later
@@ -534,22 +461,222 @@ set_score_tiles:
     ; blank out the corresponding tiles
     ld h, d
     ld l, e
-    ld de, 16
+    ld de, 8
+
+    ; do this before restoring c
+    xor a
 
     pop bc
-    push bc
 
-    xor a
 .tile_erase_loop
-    REPT 16
+    REPT 8
     ld [hl+], a
     ENDR
     add hl, de
     dec c
     jr nz, .tile_erase_loop
 
-    ; clear this off the stack
+    ret
+
+
+; draw a few characters of text
+; de: tile offset (bytes, could easily overflow a single byte so it's gotta be 16bit)
+; b: tile offset (number of tiles)
+; c: number of tiles to write
+; hl: text label
+draw_score_sec:
+
+    ; push all onto the stack so we can re-use for row 2
+    push hl
+    push de
+    push bc
+
+    ; SETTING UP SCORE ROW 1
+    ld hl, _SCRN0
+
+    ; gotta swap b and c here.
+    push bc        ; store bc so we can get c back in a moment
+
+    ld c, b
+    ld b, 0
+
+    add hl, bc
+
+    pop bc     ; set c for set_score_tiles
+
+    ; b already has TILE_OFFSET so we can just add to it
+    ; or, we could, if registers were nice instead of hell
+    ; just swap real quick
+    ld a, b
+    add a, TEXT_START_TILE_1
+    ld b, a
+
+    ; we need hl for math
+    push hl
+
+    ; de already had TILE_OFFSET_BYTES, so we can just add to THAT
+    ; again, no, it's harder. but doable.
+    ld h, d
+    ld l, e
+    ld de, $8800 + (TEXT_START_TILE_1 - $80) * BYTES_PER_TILE
+    add hl, de
+    ld d, h
+    ld e, l
+
+    pop hl     ; we don't need it but we gotta clear the stack
+
+    ; c was set earlier by the pop
+    call set_score_tiles
+
+    ; restore values for a slightly modified repeat
     pop bc
+    pop de
+    pop hl
+
+    ; re-store for actual draw, and cleanup pass
+    push hl ; text label
+    push de ; bytes offset
+
+    ; SETTING UP SCORE ROW 2
+    ; prepare hl
+    ld hl, _SCRN0 + CANVAS_WIDTH_TILES
+
+    ; gotta swap b and c here.
+    push bc        ; store bc so we can get c back in a moment
+
+    ld c, b
+    ld b, 0
+
+    add hl, bc
+
+    pop bc         ; set c for set_score_tiles
+
+    ; prepare b
+    ld a, b
+    add a, TEXT_START_TILE_1 + 1
+    ld b, a
+
+    ; we still need hl for math
+    push hl
+
+    ; prepare de
+    ld h, d
+    ld l, e
+    ld de, $8800 + (TEXT_START_TILE_1 + 1 - $80) * BYTES_PER_TILE
+    add hl, de
+    ld d, h
+    ld e, l
+
+    pop hl           ; clear stack
+
+    ; c was set earlier
+    call set_score_tiles
+
+    ; zero out text buffer
+    xor a
+    ld hl, _text_buffer
+    ld c, TEXT_BUFFER_SIZE
+    call fill
+
+    ; pull values off the stack once more to clean up,
+    ; and to fetch the bytes offset and text label.
+    pop hl ; bytes offset. no, this isn't a reg mixup, we need to
+           ; swap de and hl in all the other work we're doing.
+    ld bc, $8800
+    add hl, bc
+
+    pop de ; text label
+    call draw_text
+
+    ret
+
+
+; clean up garbage in a tile
+; a: tile offset
+garbage_cleanup:
+    ld b, a
+
+    ; cleanup: clear palette for one tile just before where we started
+    ld a, 1
+    ld [rVBK], a
+
+    ; and palettes for map squares
+    ld hl, _SCRN0
+
+    ld c, b
+    ld b, 0
+
+    add hl, bc
+    dec hl
+    dec hl
+
+    ld a, %00001000
+    ld [hl], a
+
+    ld bc, CANVAS_WIDTH_TILES
+    add hl, bc
+    ld [hl], a
+
+    xor a
+    ld [rVBK], a
+
+    ret
+
+
+; set palettes and tile indices for scoreboard tiles.
+; hl: where to start filling
+; de: pointer to corresponding tile to start erasing
+; b: tile to start with
+; c: tiles to erase
+set_score_tiles:
+
+    ; populate bank 0, the tile proper
+    ld a, 0
+    ldh [rVBK], a
+
+    ; we need to get this back later
+    push bc
+
+    ld a, b
+.loop0:
+    ld [hl+], a
+
+    ; each successive tile in a row increases by 2
+    add a, 2
+    dec c
+    jr nz, .loop0
+
+    ; populate bank 1, the bank and palette.
+    ld a, 1
+    ldh [rVBK], a
+    ld a, %00001001 ; bank 1, palette 1
+
+    pop bc
+    push bc
+
+    dec hl
+.loop1:
+    ld [hl-], a
+    dec c
+    jr nz, .loop1
+
+    ; blank out the corresponding tiles
+    ld h, d
+    ld l, e
+    ld de, 8
+
+    ; do this before restoring c
+    xor a
+
+    pop bc
+
+.tile_erase_loop
+    REPT 8
+    ld [hl+], a
+    ENDR
+    add hl, de
+    dec c
+    jr nz, .tile_erase_loop
 
     ret
 
@@ -1657,6 +1784,12 @@ fill:
 Tiles: {{
     preprocess_data.define_tiles(
         tiles=[
+            Tile(
+                name="void",
+                type=BG_TYPE,
+                palette="*",
+                palette_only=True,
+            ),
             Tile(
                 name="ball",
                 type=SPRITE_TYPE,
