@@ -311,7 +311,7 @@ def process(inname, outname=None):
             label = None
             expression = None
 
-            new_line = None
+            new_line = ""
 
             # single-line match.
             match = re.match(SINGLE_LINE_MACRO_REGEX, line)

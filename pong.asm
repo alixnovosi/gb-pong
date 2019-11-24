@@ -32,6 +32,7 @@ _BallXDir      RB 1               ; 1 is right
 _P1PadSpeed    RB 1
 _p1_score      RB 3
 _p2_score      RB 3
+_score_changed RB 1
 
                RSSET  _TEXT_BUFFER
 _text_buffer   RB 40
@@ -150,6 +151,9 @@ init_score:
     ld bc, 3
     call mem_Copy
 
+    xor a
+    ld [_score_changed], a
+
     ; blank out tile 255
     ld a, 1
     ldh [rVBK], a
@@ -161,8 +165,21 @@ init_score:
     call init_scores
 
 
+; init some game stats that happen ONLY ON GAME START
+; and not on point score restart
+init_game_start:
+    ld a, 1
+    ld [_BallXDir], a
+    ld [_BallSpeedY], a
+    ld [_BallSpeedX], a
+    ld [_BallYDir], a
+    ld a, 2
+    ld [_P1PadSpeed], a
+
+
+; init sprite. NOTE: after point score, we jump here
 initsprite:
-    ld a, 84                      ; initialize ball sprite
+    ld a, 84
     ld [BallYPos], a
     ld [BallXPos], a
     ld a, 0
@@ -197,17 +214,6 @@ initsprite:
     ld a, %01000001
     ld [PlayerPadBotAttrs], a
 
-    ld a, 1
-    ld [_BallSpeedY], a
-    ld [_BallSpeedX], a
-    ld [_BallYDir], a
-    ld [_BallXDir], a
-    ld a, 2
-    ld [_P1PadSpeed], a
-
-    ld a, 250
-    push af
-
 
 loop:
     halt
@@ -238,29 +244,8 @@ loop:
     call nz, p1_move_down
     pop af
 
-    ; use af as a counter to do a test score change.
-    ; later we will reset screen on points, so this won't be necessary
-    pop af
-    cp 0
-    jp z, .reset_counter
+    call update_scores
 
-.update_counter:
-    dec a
-    push af
-    jp .counter_check_done
-
-.reset_counter:
-    xor a
-    call increment_score
-
-    ld a, 1
-    call increment_score
-
-    call draw_scores
-    ld a, 120
-    push af
-
-.counter_check_done:
     jr loop
 
 
@@ -408,11 +393,13 @@ init_scores:
     ret
 
 
-
 ; increment score, stored as a decimal string
 ; a: 0 for p1, 1 for p2
 increment_score:
-    jp nz, .p2
+    cp a, 1
+    jp z, .p2
+
+.p1:
     ld hl, _p1_score
     jp .loaded
 .p2:
@@ -442,6 +429,10 @@ increment_score:
 
 .nooverflow:
 
+    ; update the flag
+    ld a, 1
+    ld [_score_changed], a
+
     ret
 
 
@@ -468,6 +459,23 @@ draw_labels:
     ld d, P2_SCORE_OFFSET - (P2_LABEL_OFFSET + P2_LABEL_SIZE) + 1
     call garbage_cleanup
 
+    ret
+
+
+; check score change flag and update score if necessary
+update_scores:
+    ld a, [_score_changed]
+    cp 1
+    jr nz, .popret
+
+    ; reset
+    xor a
+    ld [_score_changed], a
+
+    call draw_scores
+    jp initsprite
+
+.popret:
     ret
 
 
@@ -1046,6 +1054,18 @@ ball_left_move:
     ld a, b
     ld [BallXPos], a
 
+    ; leaves 1 or 0 in a
+    call check_p2_score
+    cp 1
+    jp nz, .popret
+
+    xor a
+    call increment_score
+
+    ; flip ball dir
+    xor a
+    ld [_BallXDir], a
+
 .popret:
     pop hl
     pop de
@@ -1133,11 +1153,81 @@ ball_right_move:
     ld a, b
     ld [BallXPos], a
 
+    ; leaves 1 or 0 in a
+    call check_p1_score
+    cp 1
+    jp nz, .popret
+
+    xor a
+    call increment_score
+
+    ; flip ball dir
+    ld a, 1
+    ld [_BallXDir], a
+
 .popret:
     pop hl
     pop de
     pop bc
     pop af
+    ret
+
+
+; check if p1 scored and put result in a.
+check_p1_score:
+    ; in goal area,
+    sub a, RIGHT_BORDER - 4
+    jp c, .noscore
+
+    ; moving left,
+    ld a, [_BallXDir]
+    cp 0
+    jp nz, .noscore
+
+    call in_goal
+    ret
+
+.noscore:
+    xor a
+    ret
+
+
+; same but for p2
+check_p2_score:
+    ; in goal area,
+    sub a, LEFT_BORDER + 4
+    jp nc, .noscore
+
+    ; moving right,
+    ld a, [_BallXDir]
+    cp 1
+    jp nz, .noscore
+
+    call in_goal
+    ret
+
+.noscore:
+    xor a
+    ret
+
+
+; subroutine just to check goal bounds,
+; so it's reusable
+in_goal
+    ; and at the right y height
+    ld a, [BallYPos]
+    sub a, GOAL_Y_TOP
+    jp c, .noscore
+
+    ld a, [BallYPos]
+    sub a, GOAL_Y_BOT
+    jp nc, .noscore
+
+    ld a, 1
+    ret
+
+.noscore:
+    xor a
     ret
 
 
@@ -1948,3 +2038,6 @@ Font: {{
     preprocess_data.define_font(fontfile="font.png")
 }}
 FontEnd:
+
+RandData: {{ }}
+RandDataEnd:
