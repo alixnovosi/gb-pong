@@ -33,6 +33,9 @@ _P1PadSpeed    RB 1
 _p1_score      RB 3
 _p2_score      RB 3
 _score_changed RB 1
+_rand_index    RB 1               ; index into rand data for a rand value
+_rand_size     RB 1
+_rand_data     RB 50
 
                RSSET  _TEXT_BUFFER
 _text_buffer   RB 40
@@ -131,6 +134,19 @@ initscreen:
     xor a
     ld [rVBK], a
 
+    ; TODO not sure if this is the best way of keeping it in sync
+    ld a, 50
+    ld [_rand_size], a
+
+    xor a
+    ld [_rand_index], a
+
+    ; put random data in memory
+    ld hl, RandData
+    ld de, _rand_data
+    ld bc, 50
+    call mem_Copy
+
     xor a                         ; Clear sprite table
     ld hl, _OAM_DATA
     ld bc, _SECTION_LENGTH
@@ -168,17 +184,19 @@ init_score:
 ; init some game stats that happen ONLY ON GAME START
 ; and not on point score restart
 init_game_start:
-    ld a, 1
+    xor a
     ld [_BallXDir], a
-    ld [_BallSpeedY], a
-    ld [_BallSpeedX], a
-    ld [_BallYDir], a
     ld a, 2
     ld [_P1PadSpeed], a
 
 
 ; init sprite. NOTE: after point score, we jump here
+; TODO rename
 initsprite:
+
+    ; randomize ball speed and vert direction
+    call randball
+
     ld a, 84
     ld [BallYPos], a
     ld [BallXPos], a
@@ -381,10 +399,7 @@ ball_oob_y:
 
 
 ; draw score labels and pull scores from memory to write them.
-init_scores:
-    ; TODO implement painful logic to parse digits from memory and write score.
-    ; and also to replace high zeros with spaces.
-
+init_scores
     call wait_for_vblank
 
     call draw_labels
@@ -1066,6 +1081,9 @@ ball_left_move:
     xor a
     ld [_BallXDir], a
 
+    ; fiddle with randomness
+    call inc_rand_pointer
+
 .popret:
     pop hl
     pop de
@@ -1164,6 +1182,9 @@ ball_right_move:
     ; flip ball dir
     ld a, 1
     ld [_BallXDir], a
+
+    ; fiddle with randomness
+    call inc_rand_pointer
 
 .popret:
     pop hl
@@ -1898,6 +1919,137 @@ fill:
     ld [hl+], a
     dec c
     jr nz, fill
+    ret
+
+
+; randomize ball vertical direction
+randball:
+
+    ld a, 1
+    ld [_BallSpeedX], a
+
+    ld b, MIN_BALL_SPEED
+    ld c, 2
+    call get_bound_rand_data
+
+    ld [_BallSpeedY], a
+
+    ld a, 0
+    ld b, a
+    ld c, 6
+    call get_bound_rand_data
+
+    ; coin flip?
+    ld b, a
+    ld a, 3
+
+    sub a, b
+    jp c, .down
+
+.up:
+    xor a
+    jp .dir
+
+.down:
+    ld a, 1
+
+.dir:
+    ld [_BallYDir], a
+
+    ret
+
+
+; move random pointer by one,
+; handling overflows
+inc_rand_pointer:
+    push af
+    push bc
+
+    ; need to increment index
+    ld a, [_rand_index]
+    ld c, a
+    inc c
+
+    ld a, [_rand_size]
+    dec a
+    sub a, c
+    jp nc, .nofix
+
+    ; fix overflow
+    xor a
+    jp .popret
+
+.nofix:
+    ld a, c
+
+.popret:
+    ld [_rand_index], a
+    pop bc
+    pop af
+    ret
+
+
+; return data at pointer in a
+; increment pointer and loop if necessary
+get_rand_data:
+    push bc
+    push hl
+
+    ld a, [_rand_index]
+    ld c, a
+
+    xor a
+    ld b, a
+
+    ld hl, _rand_data
+    add hl, bc
+    ld a, [hl]
+
+    call inc_rand_pointer
+
+.popret:
+    pop hl
+    pop bc
+    ret
+
+
+; bound data
+; b: min (inclusive)
+; c: max (inclusive)
+; data returned in a
+get_bound_rand_data:
+    ; gonna need to do some juggling
+    push de
+
+    call get_rand_data
+
+    ; now we have a random number in a
+
+    inc c                ; add one, because it's an inclusive bound and we're checking carry
+    sub a, c
+
+    jp c, .maxcapped
+
+    ; the only cases are over max, under min, or in middle
+    ; so if we crossed the max we can just bound and return
+    ld a, c
+    jp .popret
+
+.maxcapped:
+    add a, c             ; fix sub
+
+    sub a, b
+    jp nc, .mincapped
+
+    ld a, b
+    jp .popret
+
+.mincapped:
+    ; just gotta fix the sub
+    add a, b
+
+.popret:
+    pop de
     ret
 
 

@@ -1,5 +1,6 @@
 import collections
 import re
+import random
 import sys
 
 from PIL import Image
@@ -65,6 +66,9 @@ class Data:
         # map bytes (indicating what tiles) and data bytes (indicating palettes)
         self.output_map = []
         self.output_map_data = []
+
+        # for psueudo-random data
+        self.randdata = []
 
     def define_tiles(self, *, tiles):
         """define several tiles and do most of the work on palette tiles."""
@@ -279,6 +283,33 @@ class Data:
         self.output_map.append("    db " + ", ".join(map_row_bytes))
         self.output_map_data.append("    db " + ", ".join(palette_row_bytes))
 
+    def define_rand_data(self):
+        """generate bytes of random data, 0-9 inclusive"""
+        rand_min = 1
+        rand_max = 4
+
+        # TODO let us configure it.
+        num = 50
+        break_size = 10
+
+        data = []
+        data_row = []
+        for i in range(num):
+            if i > 0 and i % break_size == 0:
+                byte_string = ", ".join(data_row)
+                byte_string = f"    db {byte_string}"
+                data.append(byte_string)
+                data_row = []
+
+            data_row.append(str(random.randint(rand_min, rand_max)))
+
+        # last row
+        byte_string = ", ".join(data_row)
+        byte_string = f"    db {byte_string}"
+        data.append(byte_string)
+
+        self.randdata = "\n".join(data) + "\n"
+
     def finish_tiles(self):
         return "\n\n".join(self.output_tiles) + "\n"
 
@@ -383,6 +414,10 @@ def process(inname, outname=None):
                 elif label == "Font:":
                     eval(expression)
                     new_line = f"{label}\n{preprocess_data.font}"
+
+                elif label == "RandData:":
+                    preprocess_data.define_rand_data()
+                    new_line = f"{label}\n{preprocess_data.randdata}"
 
                 output_lines.append(new_line)
 
