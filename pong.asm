@@ -1834,7 +1834,7 @@ move_opp_y:
 .top_border_check:
     ld a, [OppPadTopYPos]
 
-    cp TOP_BORDER
+    sub a, TOP_BORDER
 
     ; change direction if we're above the top border.
     jp nc, .move_up
@@ -1842,7 +1842,7 @@ move_opp_y:
     ; if above the border, swap it and return.
     ld a, 1
     ld [_OppYDir], a
-    jp .popret
+    jp .move_down
 
 .move_up:
     ld a, [OppPadTopYPos]
@@ -1850,7 +1850,7 @@ move_opp_y:
     ld [OppPadTopYPos], a
 
     ld a, [OppPadMidYPos]
-    sub a, [_Player
+    sub a, 1
     ld [OppPadMidYPos], a
 
     ld a, [OppPadBotYPos]
@@ -1865,7 +1865,7 @@ move_opp_y:
     jr nz, .popret
 
 .bot_border_check:
-    ld a, [OppPadTopYPos]
+    ld a, [OppPadBotYPos]
 
     cp BOTTOM_BORDER
 
@@ -1879,15 +1879,15 @@ move_opp_y:
 
 .move_down:
     ld a, [OppPadTopYPos]
-    sub a, 1
+    add a, 1
     ld [OppPadTopYPos], a
 
     ld a, [OppPadMidYPos]
-    sub a, 1
+    add a, 1
     ld [OppPadMidYPos], a
 
     ld a, [OppPadBotYPos]
-    sub a, 1
+    add a, 1
     ld [OppPadBotYPos], a
     jp .popret
 
