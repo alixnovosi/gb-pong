@@ -20,6 +20,18 @@ PlayerPadBotYPos     RB 1
 PlayerPadBotXPos     RB 1
 PlayerPadBotTileNum  RB 1
 PlayerPadBotAttrs    RB 1
+OppPadTopYPos        RB 1
+OppPadTopXPos        RB 1
+OppPadTopTileNum     RB 1
+OppPadTopAttrs       RB 1
+OppPadMidYPos        RB 1
+OppPadMidXPos        RB 1
+OppPadMidTileNum     RB 1
+OppPadMidAttrs       RB 1
+OppPadBotYPos        RB 1
+OppPadBotXPos        RB 1
+OppPadBotTileNum     RB 1
+OppPadBotAttrs       RB 1
 
                RSSET _GAME_DATA
 _INPUT         RB 1               ; Put input data at the end of the oam data
@@ -29,7 +41,12 @@ _BallSpeedY    RB 1
 _BallSpeedX    RB 1
 _BallYDir      RB 1               ; 1 is down
 _BallXDir      RB 1               ; 1 is right
+_OppSpeedY     RB 1
+_OppSpeedX     RB 1
+_OppYDir       RB 1               ; 1 is down
+_OppXDir       RB 1               ; 1 is right
 _P1PadSpeed    RB 1
+_P2PadSpeed    RB 1
 _p1_score      RB 3
 _p2_score      RB 3
 _score_changed RB 1
@@ -188,6 +205,7 @@ init_game_start:
     ld [_BallXDir], a
     ld a, 2
     ld [_P1PadSpeed], a
+    ld [_P2PadSpeed], a
 
 
 ; init sprite. NOTE: after point score, we jump here
@@ -202,9 +220,10 @@ initsprite:
     ld [BallXPos], a
     ld a, 0
     ld [BallTileNum], a
-    ld a, %00000000
+    ld a, %00000000               ; priority, x flip, y flip, palette, tile bank, palette (3 bits)
     ld [BallAttrs], a
 
+    ; P1 paddle
     ld a, 80                      ; and paddle
     ld [PlayerPadTopYPos], a
     ld a, 16
@@ -232,6 +251,42 @@ initsprite:
     ld a, %01000001
     ld [PlayerPadBotAttrs], a
 
+    ; P2 paddle
+    ; priority, y flip, x flip, palette, tile bank, palette (3 bits)
+    ld a, 80                      ; and paddle
+    ld [OppPadTopYPos], a
+    ld a, 152
+    ld [OppPadTopXPos], a
+    ld a, 1
+    ld [OppPadTopTileNum], a
+    ld a, %00100010
+    ld [OppPadTopAttrs], a
+
+    ld a, 88                      ; and paddle mid
+    ld [OppPadMidYPos], a
+    ld a, 152
+    ld [OppPadMidXPos], a
+    ld a, 2
+    ld [OppPadMidTileNum], a
+    ld a, %00100010
+    ld [OppPadMidAttrs], a
+
+    ld a, 96                      ; and paddle bottom
+    ld [OppPadBotYPos], a
+    ld a, 152
+    ld [OppPadBotXPos], a
+    ld a, 1
+    ld [OppPadBotTileNum], a
+    ld a, %01100010
+    ld [OppPadBotAttrs], a
+
+    xor a
+    ld [_OppXDir], a
+    ld [_OppYDir], a
+    ld [_OppSpeedX], a
+
+    ld a, 2
+    ld [_OppSpeedY], a
 
 loop:
     halt
@@ -239,6 +294,7 @@ loop:
 
     call get_input
     call move_ball
+    call move_opp
 
     ld a, [_INPUT]                ; load input
 
@@ -344,6 +400,49 @@ ball_in_player_paddle:
 .popret:
     pop bc
     ret
+
+
+; leaves 0 or 1 in a
+ball_in_opp_paddle:
+    push bc
+
+    ld a, [BallXPos]
+    ld b, a
+
+    ld a, [OppPadTopXPos]     ; we (unfortunately) need to compare to four different bounds.
+    sub 8
+    sub b
+    jr nc, .nocol
+
+    ld a, [OppPadTopXPos]
+    add 1
+    sub b
+    jr c, .nocol
+
+    ld a, [BallYPos]
+    ld b, a
+
+    ld a, [OppPadTopYPos]
+    sub 8
+    sub b
+    jr nc, .nocol
+
+    ld a, [OppPadBotYPos]
+    add 1
+    sub b
+    jr c, .nocol
+
+.col:
+    ld a, 1
+    jp .popret
+
+.nocol:
+    xor a
+
+.popret:
+    pop bc
+    ret
+
 
 ; same
 ball_oob_x:
@@ -1028,6 +1127,10 @@ ball_left_move:
     cp 1
     jr z, .fixpospaddle
 
+    call ball_in_opp_paddle
+    cp 1
+    jr z, .fixposopppaddle
+
     ; leave loop if counter runs out.
 .postcollcheck:
     ld a, l
@@ -1055,15 +1158,26 @@ ball_left_move:
     cp 1
     jr z, .popret     ; we've already done all the movement we need.
 
-.noprecoll:
-    ld a, 1
-    ld [_BallXDir], a
-
     ld a, [PlayerPadMidXPos]
+
+    jp .fixposshared
+
+.fixposopppaddle:
+    ; will return 1 if we did precollision.
+    call perform_precoll_x
+    cp 1
+    jr z, .popret     ; we've already done all the movement we need.
+
+    ld a, [OppPadMidXPos]
+
+    jp .fixposshared
+
+.fixposshared:
     add 9
     ld b, a
 
-    jp .loopdone
+    ld a, 1
+    ld [_BallXDir], a
 
 .loopdone:
     ld a, b
@@ -1133,6 +1247,10 @@ ball_right_move:
     cp 1
     jr z, .fixpospaddle
 
+    call ball_in_opp_paddle
+    cp 1
+    jr z, .fixopppospaddle
+
     ; leave loop if counter runs out.
     ld a, l
     cp 0
@@ -1158,13 +1276,26 @@ ball_right_move:
     cp 1
     jr z, .popret
 
-    xor a
-    ld [_BallXDir], a
-
     ld a, [PlayerPadMidXPos]
+
+    jp .fixposshared
+
+.fixopppospaddle:
+    call perform_precoll_x
+    cp 1
+    jr z, .popret
+
+    ld a, [OppPadMidXPos]
+    sub 9
+
+    jp .fixposshared
+
+.fixposshared:
     sub 9
     ld b, a
 
+    xor a
+    ld [_BallXDir], a
     jp .loopdone
 
 .loopdone:
@@ -1316,6 +1447,10 @@ ball_up_move:
     cp 1
     jr z, .fixpospaddle
 
+    call ball_in_opp_paddle
+    cp 1
+    jr z, .fixposopppaddle
+
     ; leave loop if counter runs out.
     ld a, l
     cp 0
@@ -1342,12 +1477,20 @@ ball_up_move:
     cp 1
     jr z, .popret     ; we've already done all the movement we need.
 
-    ld a, 1
-    ld [_BallYDir], a
-
     ld a, [PlayerPadBotYPos]
+    jp .fixposshared
+
+.fixposopppaddle:
+    ld a, [OppPadBotYPos]
+
+    jp .fixposshared
+
+.fixposshared:
     add 9
     ld b, a
+
+    ld a, 1
+    ld [_BallYDir], a
 
     jp .loopdone
 
@@ -1432,12 +1575,21 @@ ball_down_move:
     cp 1
     jr z, .popret     ; we've already done all the movement we need.
 
-    xor a
-    ld [_BallYDir], a
-
     ld a, [PlayerPadTopYPos]
+
+    jp .fixposshared
+
+.fixposopppaddle:
+    ld a, [OppPadTopYPos]
+
+    jp .fixposshared
+
+.fixposshared:
     sub 1
     ld b, a
+
+    xor a
+    ld [_BallYDir], a
 
     jp .loopdone
 
@@ -1455,6 +1607,7 @@ ball_down_move:
 
 ; check if we had collision before we started moving and if so,
 ; do something about that.
+; TODO probably need to do this for opp too.
 perform_precoll_x:
     ; check precoll flag
     ld a, d
@@ -1653,6 +1806,101 @@ slow_ball_y_down:
 
 .popret:
     pop bc
+    pop af
+    ret
+
+
+move_opp:
+    push af
+
+    call move_opp_y
+    call move_opp_x
+
+.popret:
+    pop af
+    ret
+
+
+move_opp_y:
+    push af
+    push bc
+
+.up_check:
+    ; are we moving up?
+    ld a, [_OppYDir]
+    cp 0
+    jr nz, .down_check
+
+.top_border_check:
+    ld a, [OppPadTopYPos]
+
+    cp TOP_BORDER
+
+    ; change direction if we're above the top border.
+    jp nc, .move_up
+
+    ; if above the border, swap it and return.
+    ld a, 1
+    ld [_OppYDir], a
+    jp .popret
+
+.move_up:
+    ld a, [OppPadTopYPos]
+    sub a, 1
+    ld [OppPadTopYPos], a
+
+    ld a, [OppPadMidYPos]
+    sub a, [_Player
+    ld [OppPadMidYPos], a
+
+    ld a, [OppPadBotYPos]
+    sub a, 1
+    ld [OppPadBotYPos], a
+    jp .popret
+
+.down_check:
+    ; are we moving down?
+    ld a, [_OppYDir]
+    cp 1
+    jr nz, .popret
+
+.bot_border_check:
+    ld a, [OppPadTopYPos]
+
+    cp BOTTOM_BORDER
+
+    ; change direction if we're above the top border.
+    jp c, .move_down
+
+    ; if above the border, swap it and return.
+    xor a
+    ld [_OppYDir], a
+    jp .popret
+
+.move_down:
+    ld a, [OppPadTopYPos]
+    sub a, 1
+    ld [OppPadTopYPos], a
+
+    ld a, [OppPadMidYPos]
+    sub a, 1
+    ld [OppPadMidYPos], a
+
+    ld a, [OppPadBotYPos]
+    sub a, 1
+    ld [OppPadBotYPos], a
+    jp .popret
+
+.popret:
+    pop bc
+    pop af
+    ret
+
+
+move_opp_x:
+    push af
+
+.popret:
     pop af
     ret
 
@@ -1932,7 +2180,11 @@ randball:
     ld c, 2
     call get_bound_rand_data
 
+    xor a ; TEMP TEMP TEMP TEMP TODO
     ld [_BallSpeedY], a
+
+    ld a, 0
+    ld [_BallXDir], a
 
     ld a, 0
     ld b, a
