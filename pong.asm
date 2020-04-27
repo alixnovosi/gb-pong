@@ -46,7 +46,7 @@ _OppSpeedX     RB 1
 _OppYDir       RB 1               ; 1 is down
 _OppXDir       RB 1               ; 1 is right
 _P1PadSpeed    RB 1
-_P2PadSpeed    RB 1
+_P2PadSpeed    RB 2
 _p1_score      RB 3
 _p2_score      RB 3
 _score_changed RB 1
@@ -1840,22 +1840,52 @@ move_opp_y:
     jp nc, .move_up
 
     ; if above the border, swap it and return.
-    ld a, 1
+    xor a
     ld [_OppYDir], a
     jp .move_down
 
 .move_up:
+    push af
+    push bc
+    push hl
+
     ld a, [OppPadTopYPos]
-    sub a, 1
+    ld b, a
+    ld a, [_P2PadSpeed]
+
+.loop:
+    dec b
+
+    dec a
+    cp 0
+    jr z, .loopdone
+
+    ld l, a
+    ld a, b
+
+    sub a, TOP_BORDER
+    jr nc, .nofix
+    ld a, TOP_BORDER
+    ld b, a
+    jp .loopdone
+
+.nofix:
+    ld a, l
+    jp .loop
+
+.loopdone:
+    ld a, b
     ld [OppPadTopYPos], a
-
-    ld a, [OppPadMidYPos]
-    sub a, 1
+    add a, 8
     ld [OppPadMidYPos], a
-
-    ld a, [OppPadBotYPos]
-    sub a, 1
+    add a, 8
     ld [OppPadBotYPos], a
+
+; loop done
+    pop hl
+    pop bc
+    pop af
+
     jp .popret
 
 .down_check:
